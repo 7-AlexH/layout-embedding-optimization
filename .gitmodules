@@ -22,3 +22,6 @@
 [submodule "extern/libigl"]
 	path = extern/libigl
 	url = https://github.com/libigl/libigl.git
+[submodule "extern/polymesh"]
+	path = extern/polymesh
+	url = https://github.com/project-arcana/polymesh.git
