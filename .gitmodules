@@ -1,0 +1,3 @@
+[submodule "extern/clean-core"]
+	path = extern/clean-core
+	url = https://github.com/project-arcana/clean-core.git
