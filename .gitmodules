@@ -16,3 +16,6 @@
 [submodule "extern/glow-extras"]
 	path = extern/glow-extras
 	url = https://gitlab.vci.rwth-aachen.de:9000/Glow/glow-extras.git
+[submodule "extern/imgui-lean"]
+	path = extern/imgui-lean
+	url = https://gitlab.vci.rwth-aachen.de:9000/ptrettner/imgui-lean.git
