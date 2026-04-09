@@ -4,3 +4,6 @@
 [submodule "extern/typed-geometry"]
 	path = extern/typed-geometry
 	url = https://github.com/project-arcana/typed-geometry.git
+[submodule "extern/geometry-central"]
+	path = extern/geometry-central
+	url = https://github.com/nmwsharp/geometry-central.git
