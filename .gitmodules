@@ -19,3 +19,6 @@
 [submodule "extern/imgui-lean"]
 	path = extern/imgui-lean
 	url = https://gitlab.vci.rwth-aachen.de:9000/ptrettner/imgui-lean.git
+[submodule "extern/libigl"]
+	path = extern/libigl
+	url = https://github.com/libigl/libigl.git
