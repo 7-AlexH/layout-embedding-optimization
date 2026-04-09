@@ -1,3 +1,6 @@
 [submodule "extern/clean-core"]
 	path = extern/clean-core
 	url = https://github.com/project-arcana/clean-core.git
+[submodule "extern/typed-geometry"]
+	path = extern/typed-geometry
+	url = https://github.com/project-arcana/typed-geometry.git
