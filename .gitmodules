@@ -10,3 +10,6 @@
 [submodule "extern/glfw"]
 	path = extern/glfw
 	url = https://github.com/glfw/glfw.git
+[submodule "extern/glow"]
+	path = extern/glow
+	url = https://gitlab.vci.rwth-aachen.de:9000/Glow/glow.git
