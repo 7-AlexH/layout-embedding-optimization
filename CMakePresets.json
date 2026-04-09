@@ -1,0 +1,44 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 23 },
+  "configurePresets": [
+    {
+      "name": "clang-debug",
+      "description": "Debug build using Clang",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../Clang-Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "clang-release",
+      "description": "Release build using Clang",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../Clang-Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "clang-debug",
+      "configurePreset": "clang-debug",
+      "description": "Build Debug preset",
+      "jobs": 4
+    },
+    {
+      "name": "clang-release",
+      "configurePreset": "clang-release",
+      "description": "Build Release preset",
+      "jobs": 4
+    }
+  ]
+}
