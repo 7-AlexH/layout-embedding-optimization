@@ -1,6 +1,6 @@
 # Embedding Optimization of Layouts via Distortion Minimization
 
-Code accompanying the paper **_Embedding Optimization of Layouts via Distortion Minimization_**.
+Code accompanying the paper **_[Embedding Optimization of Layouts via Distortion Minimization](https://www.graphics.rwth-aachen.de/media/papers/360/layout-optimization.pdf)_**.
 
 ## Cloning with Submodules
 
