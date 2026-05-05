@@ -37,6 +37,22 @@ cmake --version
 clang --version
 ninja --version
 ```
+
+## Downloading LibTorch
+
+This project depends on LibTorch 2.4.0 (CPU). A download script is provided in the root folder:
+
+```bash
+bash download_libtorch.sh
+```
+
+This will download and extract LibTorch into `extern/libtorch/`.
+
+To verify the installation, check the following files in `extern/libtorch/`:
+
+- `build-hash`: should contain `e4ee3be4063b7c430974252fdf7db42273388d86`
+- `build-version`: should contain `2.4.0+cpu`
+
 ## Configure
 
 ```bash
