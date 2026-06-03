@@ -12,3 +12,15 @@ CMakeLists.txt.user
 CMakeFiles/
 cmake_install.cmake
 Makefile
+
+# Data
+data/*/images/
+data/state_l.obj
+data/state_t.obj
+
+# Other 
+.cache/
+.vscode/
+.qtcreator/
+
+compile_commands.json
