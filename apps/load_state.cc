@@ -47,11 +47,11 @@ int main()
 
     pm::Mesh m;
     pm::vertex_attribute<pos3> pos(m);
-    pm::load(mesh_path.c_str(), m, pos);
+    pm::load(mesh_path.string().c_str(), m, pos);
 
     pm::Mesh l;
     pm::vertex_attribute<pos3> l_pos(l);
-    pm::load(layout_path.c_str(), l, l_pos);
+    pm::load(layout_path.string().c_str(), l, l_pos);
 
     preprocess_target_and_layout(pos, l_pos);
 

@@ -209,7 +209,8 @@ void compute_path_network_exact(TargetMeshData const& _tmd, LayoutData const& _l
         GeodesicAlgorithmExact gae(*(gcmesh.mesh.get()), *gcmesh.positionGeometry.get());
 
 #pragma omp for
-        for (size_t i = 0; i < l_ehs.size(); ++i)
+        // MSVC only implements OpenMP 2.0, which requires a signed loop counter.
+        for (int i = 0; i < static_cast<int>(l_ehs.size()); ++i)
         {
             auto l_eh = l_ehs[i];
 

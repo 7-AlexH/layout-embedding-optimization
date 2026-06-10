@@ -100,6 +100,7 @@ at::Tensor LayoutOpt::SurfacePoint::get_pos(at::Tensor const& _pos, polymesh::Me
     }
 
     assert(false && "should not be reached");
+    return {};
 }
 
 at::Tensor SurfacePoint::get_pos(pm::vertex_attribute<at::Tensor> const& _pos) const
@@ -140,6 +141,9 @@ at::Tensor SurfacePoint::get_pos(pm::vertex_attribute<at::Tensor> const& _pos) c
 
         return get_pos_intern(A, B, C);
     }
+
+    assert(false && "should not be reached");
+    return {};
 }
 
 at::Tensor SurfacePoint::get_pos(pm::halfedge_attribute<at::Tensor> const& _pos) const
@@ -172,6 +176,9 @@ at::Tensor SurfacePoint::get_pos(pm::halfedge_attribute<at::Tensor> const& _pos)
 
         return get_pos_intern(A, B, C);
     }
+
+    assert(false && "should not be reached");
+    return {};
 }
 
 at::Tensor SurfacePoint::get_pos_intern(at::Tensor const& A) const { return A; }

@@ -28,7 +28,7 @@ int main()
     //===================================
     pm::Mesh m;
     pm::vertex_attribute<pos3> pos(m);
-    pm::load(mesh_path.c_str(), m, pos);
+    pm::load(mesh_path.string().c_str(), m, pos);
 
     //===================================
     // Detect singular vertices (valence != 4 in quad mesh)
@@ -126,5 +126,5 @@ int main()
     if (open_viewer)
         view_mesh(layout_pos, vo_layout);
 
-    pm::save(layout_path.c_str(), layout_pos);
+    pm::save(layout_path.string().c_str(), layout_pos);
 }

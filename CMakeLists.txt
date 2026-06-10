@@ -95,6 +95,11 @@ find_package(OpenMP REQUIRED)
 list(PREPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/extern/libtorch") #make sure we use this libtorch and not system
 find_package(Torch REQUIRED)
 message(STATUS "Torch version: ${Torch_VERSION}")
+
+# Collect LibTorch's runtime DLLs (Windows) so apps can copy them next to their binaries.
+if(WIN32)
+    file(GLOB TORCH_DLLS "${CMAKE_CURRENT_SOURCE_DIR}/extern/libtorch/lib/*.dll")
+endif()
 set(CMAKE_CXX_FILES "${CMAKE_CXX_FILES} ${TORCH_CXX_FLAGS}")
 
 # Find Eigen if not already present
@@ -110,9 +115,17 @@ file(GLOB_RECURSE LIBRARY_SOURCE_FILES
 add_library(LayoutOpt ${LIBRARY_SOURCE_FILES})
 target_link_libraries(LayoutOpt PUBLIC imgui typed-geometry polymesh glow-extras OpenMP::OpenMP_CXX Eigen3::Eigen geometry-central ${TORCH_LIBRARIES})
 target_include_directories(LayoutOpt PUBLIC library extern/libigl/include ${TORCH_INCLUDE_DIRS} )
+# Eigen 3.4 is required for the Eigen::Vector3<T>/Vector2<T> template aliases used in
+# Types.hh. geometry-central bundles Eigen 3.3.9, so prepend our 3.4 copy (BEFORE) to
+# win the header search over geometry-central's interface include dir.
+target_include_directories(LayoutOpt BEFORE PUBLIC extern/eigen-3.4.0)
 target_compile_definitions(LayoutOpt PUBLIC OUTPUT_PATH="${OUTPUT_PATH}")
 target_compile_definitions(LayoutOpt PUBLIC DATA_PATH="${DATA_PATH}")
-target_link_libraries(LayoutOpt PRIVATE stdc++fs)
+# libstdc++'s separate filesystem library only exists on GCC/Clang with libstdc++.
+# MSVC (and modern libc++) provide std::filesystem in the standard library.
+if(NOT MSVC)
+    target_link_libraries(LayoutOpt PRIVATE stdc++fs)
+endif()
 
 # Executable targets (apps directory)
 file(GLOB_RECURSE APP_SOURCE_FILES "apps/*.cc")
@@ -123,4 +136,14 @@ foreach(APP_SOURCE_FILE ${APP_SOURCE_FILES})
 
     add_executable(${APP_NAME} ${APP_SOURCE_FILE})
     target_link_libraries(${APP_NAME} PRIVATE LayoutOpt)
+
+    # On Windows, LibTorch ships its runtime as DLLs that must sit next to the
+    # executable (or on PATH). Copy them into the output dir after each build so
+    # the apps are runnable directly.
+    if(WIN32 AND TORCH_DLLS)
+        add_custom_command(TARGET ${APP_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${TORCH_DLLS} $<TARGET_FILE_DIR:${APP_NAME}>
+            COMMAND_EXPAND_LISTS)
+    endif()
 endforeach()
