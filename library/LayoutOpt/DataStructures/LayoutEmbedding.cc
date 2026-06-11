@@ -20,6 +20,15 @@ TargetMeshData::TargetMeshData(pm::vertex_attribute<pos3> const& _pos)
     assert(torch_pos_.sizes().size() == 2 && "torch_pos_ must be 2D");
     assert(torch_pos_.size(0) == mesh_->vertices().size() && "torch_pos_ must have n_vertices rows");
     assert(torch_pos_.size(1) == 3 && "torch_pos_ must have 3 columns");
+
+    // remove-autodiff Phase 3: plain-double mirror of torch_pos_ (computed
+    // independently from pos_, not from the tensor, so it is a real cross-check).
+    pos_mat_.resize(mesh_->vertices().size(), 3);
+    for (auto vh : mesh_->vertices())
+    {
+        auto const& p = pos_[vh];
+        pos_mat_.row(vh.idx.value) = Eigen::RowVector3d(p.x, p.y, p.z);
+    }
 }
 
 LayoutData::LayoutData(pm::vertex_attribute<pos3> const& _l_pos)

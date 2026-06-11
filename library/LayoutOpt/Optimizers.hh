@@ -20,6 +20,12 @@ struct OptimizerData
     pm::vertex_attribute<at::Tensor> m; // First moment vector (R²)
     pm::vertex_attribute<at::Tensor> v; // Second moment vector (R)
 
+    // remove-autodiff Phase 3: plain-double counterparts of m/v. These are
+    // detached optimizer state (no autograd), so they carry no gradient; the
+    // per-step writes are wired in Phase 5 when the optimizer is de-torchified.
+    pm::vertex_attribute<vec2d> m_eigen;  // First moment vector (R²)
+    pm::vertex_attribute<double> v_eigen; // Second moment vector (R)
+
     void init_vetor_adam_param(pm::Mesh const& _mesh, double _step_size = 0.01);
 };
 

@@ -12,7 +12,7 @@
 namespace LayoutOpt
 {
 
-EvalInfo eval(TargetMeshData& _tmd, LayoutData& _ld, PathNetworkData& _pnd, OverlayMeshData& _omd, OptimizationOptions _opts, int i, OptimizerData& _od)
+EvalInfo eval(TargetMeshData& _tmd, LayoutData& _ld, PathNetworkData& _pnd, OverlayMeshData& _omd, OptimizationOptions const& _opts, int i, OptimizerData& _od)
 {
     // DEBUG_OUT("iteration " << i << ":")
 

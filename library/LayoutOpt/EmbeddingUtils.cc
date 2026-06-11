@@ -689,6 +689,7 @@ void reset_embedding_data(LayoutData& _ld, PathNetworkData& _pnd, OverlayMeshDat
     // reset layout
     _ld.map_to_overlay_vertices_.reset();
     _ld.torch_embedded_edge_length_.reset();
+    _ld.embedded_edge_length_.reset();
 
     // reset path network
     _pnd.map_to_overlay_vertices_.reset();
@@ -696,6 +697,8 @@ void reset_embedding_data(LayoutData& _ld, PathNetworkData& _pnd, OverlayMeshDat
     _pnd.uvs_.reset();
     _pnd.torch_t_.reset();
     _pnd.torch_uvs_.reset();
+    _pnd.t_flat_.reset();
+    _pnd.uvs_flat_.reset();
 
     // reset overlay mesh
     _omd.patch_boundary_mask_.reset();
@@ -709,6 +712,9 @@ void sync_tg_and_torch(OverlayMeshData& _omd)
 {
     assert(_omd.torch_pos_.has_value());
 
+    // remove-autodiff Phase 3: refresh the plain-double mirror in lockstep with pos_.
+    _omd.pos_mat_.emplace(Eigen::MatrixX3d(_omd.mesh_->vertices().size(), 3));
+
     for (auto o_vh : _omd.mesh_->vertices())
     {
         auto pos_new = torch_to_pos3(_omd.torch_pos_.value()[o_vh.idx.value]);
@@ -718,6 +724,7 @@ void sync_tg_and_torch(OverlayMeshData& _omd)
         assert(!tg::is_nan(pos_new.z));
 
         _omd.pos_[o_vh] = pos_new;
+        _omd.pos_mat_.value().row(o_vh.idx.value) = Eigen::RowVector3d(pos_new.x, pos_new.y, pos_new.z);
     }
 }
 

@@ -17,6 +17,7 @@
 #include <LayoutOpt/Optimizers.hh>
 #include <LayoutOpt/Resample.hh>
 #include <LayoutOpt/ScalarFields.hh>
+#include <LayoutOpt/Utils/Timer.hh>
 #include <LayoutOpt/Visualization/ColorsMaps.hh>
 #include <LayoutOpt/Visualization/Viewing.hh>
 
@@ -57,7 +58,8 @@ int main()
     fs::path base_path = fs::path(DATA_PATH) / "Spot/";
     fs::path path = base_path / "spot.obj";
     fs::path l_path = base_path / "spot_layout.obj";
-    
+
+
     fs::path folder_name_images = base_path / "images";
     fs::create_directories(folder_name_images);
 
@@ -107,8 +109,16 @@ int main()
         return oss.str();
     };
 
-    constexpr double STEP_SIZE_MAX = 0.0015;
-    constexpr double STEP_SIZE_MIN = 0.0005;
+    // volatile, NOT constexpr: torch_cpu.dll clobbers the callee-saved registers
+    // xmm14/xmm15 during eval() (Win64 ABI violation). MSVC parks loop-invariant
+    // FP constants in exactly those registers, so any constant used inside the
+    // loop after the first eval() silently turns to garbage (observed: step_size
+    // became exactly 0 -> frozen optimization). volatile forces a memory reload
+    // at every use. Remove once libtorch is gone (remove-autodiff plan, Phase 6).
+    static volatile double STEP_SIZE_MAX = 0.0015;
+    static volatile double STEP_SIZE_MIN = 0.0005;
+    static volatile double STEP_GROWTH = 1.15;
+    static volatile double RESAMPLE_SPACING = 0.2;
 
     OptimizerData od;
     od.init_vetor_adam_param(*pnd.mesh_.get(), STEP_SIZE_MIN);
@@ -125,7 +135,7 @@ int main()
             DEBUG_OUT("reset vector adam")
             od.init_vetor_adam_param(*pnd.mesh_.get(), STEP_SIZE_MIN);
             DEBUG_OUT("resample")
-            resample_layout(tmd, ld, pnd, omd, 0.2);
+            resample_layout(tmd, ld, pnd, omd, RESAMPLE_SPACING);
             compute_layout_embedding_init(tmd, ld, pnd, omd, false);
             ITER_UNTIL_REMESH += 15;
         }
@@ -144,6 +154,8 @@ int main()
 
         DEBUG_OUT("apply")
         apply(tmd, ld, pnd, omd, od, eval_info);
-        od.step_size = tg::min(od.step_size * 1.15, STEP_SIZE_MAX); // warmup
+        od.step_size = tg::min(od.step_size * STEP_GROWTH, double(STEP_SIZE_MAX)); // warmup
     }
+
+    timers.print_stats(std::cout);
 }

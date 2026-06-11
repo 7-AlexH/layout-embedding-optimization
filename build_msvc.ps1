@@ -34,7 +34,9 @@ $cmds = @(
     "cmake --preset $Preset"
 )
 if (-not $ConfigureOnly) {
-    $cmds += "if errorlevel 1 exit /b 1"
+    # NOTE: do not insert "if errorlevel 1 exit /b 1" here — cmd would parse the
+    # following "&& cmake --build" as part of the if-body, silently skipping the
+    # build when configure SUCCEEDS. && already short-circuits on failure.
     $cmds += "cmake $buildArgs"
 }
 $full = ($cmds -join " && ")

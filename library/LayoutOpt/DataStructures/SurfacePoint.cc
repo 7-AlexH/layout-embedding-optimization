@@ -181,6 +181,45 @@ at::Tensor SurfacePoint::get_pos(pm::halfedge_attribute<at::Tensor> const& _pos)
     return {};
 }
 
+vec3d SurfacePoint::bary_full() const
+{
+    switch (type)
+    {
+    case SurfacePointType::VertexPoint:
+        return vec3d(1.0, 0.0, 0.0);
+    case SurfacePointType::EdgePoint:
+    {
+        double const a = bary_coords[0].item<double>();
+        return vec3d(a, 1.0 - a, 0.0);
+    }
+    case SurfacePointType::FacePoint:
+    {
+        double const a = bary_coords[0].item<double>();
+        double const b = bary_coords[1].item<double>();
+        return vec3d(a, b, 1.0 - a - b);
+    }
+    default:
+        return vec3d(0.0, 0.0, 0.0);
+    }
+}
+
+vec3d SurfacePoint::get_pos(Eigen::MatrixX3d const& _pos, polymesh::Mesh const& _mesh) const
+{
+    // assertion (tensor shape is still authoritative during Phases 3-5)
+    is_tensor_valid();
+
+    vec3d const b = bary_full();
+    auto const hh = _mesh.handle_of(heh_idx);
+
+    // The three face corners. For vertex/edge points the unused corners carry a
+    // zero weight in b, so a single weighted sum reproduces every get_pos_intern overload.
+    Eigen::RowVector3d const A = _pos.row(hh.vertex_from().idx.value);
+    Eigen::RowVector3d const B = _pos.row(hh.vertex_to().idx.value);
+    Eigen::RowVector3d const C = _pos.row(hh.next().vertex_to().idx.value);
+
+    return (b[0] * A + b[1] * B + b[2] * C).transpose();
+}
+
 at::Tensor SurfacePoint::get_pos_intern(at::Tensor const& A) const { return A; }
 at::Tensor SurfacePoint::get_pos_intern(at::Tensor const& A, at::Tensor const& B) const { return bary_coords * A + (1.0 - bary_coords) * B; }
 at::Tensor SurfacePoint::get_pos_intern(at::Tensor const& A, at::Tensor const& B, at::Tensor const& C) const

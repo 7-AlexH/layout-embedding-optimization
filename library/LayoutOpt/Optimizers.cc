@@ -30,6 +30,10 @@ void OptimizerData::init_vetor_adam_param(polymesh::Mesh const& _mesh, double _s
 
     m = _mesh.vertices().make_attribute<torch::Tensor>(torch::zeros({2}));
     v = _mesh.vertices().make_attribute<torch::Tensor>(torch::zeros({}));
+
+    // remove-autodiff Phase 3: plain-double mirrors, zero-initialized (Phase 5 wires per-step writes).
+    m_eigen = _mesh.vertices().make_attribute<vec2d>(vec2d::Zero());
+    v_eigen = _mesh.vertices().make_attribute<double>(0.0);
 }
 
 pm::vertex_attribute<at::Tensor> vector_adam_updates(TargetMeshData const& _tmd, PathNetworkData const& _pnd, pm::vertex_attribute<at::Tensor> const& _gradients, OptimizerData& _od)

@@ -14,13 +14,13 @@ The optimization problem is: given a coarse quad layout embedded onto a triangle
 
 **File:** `library/LayoutOpt/DataStructures/SurfacePoint.hh`
 
-The fundamental differentiable quantity is `SurfacePoint::bary_coords`, a `torch::Tensor` holding 2 or 3 barycentric coordinates that locate a path-network vertex on the target surface:
+The fundamental differentiable quantity is `SurfacePoint::bary_coords`, a `torch::Tensor` locating a path-network vertex on the target surface (shape contract enforced by `is_tensor_valid()`):
 
-- **Vertex point:** 1 coordinate (trivial)
-- **Edge point:** 2 coordinates (α along the edge)
-- **Face point:** 3 barycentric coordinates (α, β, γ)
+- **Vertex point:** no coordinates (the position is the vertex itself)
+- **Edge point:** shape `[1]` — α, the weight on the halfedge's from-vertex (1 − α on the to-vertex)
+- **Face point:** shape `[2]` — α, β; the third barycentric coordinate is implicit (γ = 1 − α − β)
 
-These are the **leaf tensors** of the autograd graph — all other differentiable quantities are derived from them. `SurfacePoint::get_pos()` converts barycentric coordinates back to a 3D world position via differentiable linear interpolation, connecting downstream loss computations to the graph.
+Only a subset of these are **leaf tensors** of the autograd graph: `requires_grad` is set exclusively on the face-point `bary_coords` of path-network vertices that map to **layout nodes** (`compute_differentiable_surface_points`, `DifferentiableIntersection.cc`) — 2 degrees of freedom per layout node. All other surface points, including every strip-interior path vertex, are constants; the interior overlay positions are *derived* from the layout-node leaves through differentiable edge–edge intersections (`compute_differentiable_intersection_for_overlay`). `SurfacePoint::get_pos()` converts barycentric coordinates back to a position via differentiable linear interpolation, connecting downstream loss computations to the graph.
 
 `SurfacePoint::copy()` creates a detached copy (not part of the computation graph), used when computing world-space step sizes in the optimizer without creating spurious gradient paths.
 
@@ -78,7 +78,7 @@ All loss functions return a `torch::Tensor` scalar built from differentiable ope
 Computes per-patch harmonic parameterizations using cotangent weights, then measures the distortion of the resulting map. Steps:
 
 1. Assemble UV boundary conditions from `torch_uvs_`
-2. Solve for interior UVs via `torch_harmonic_param` — a differentiable cotangent-weight linear solve using `torch::linalg` operations
+2. Solve for interior UVs via `torch_harmonic_param` — a differentiable cotangent-weight linear solve. By default this uses `sparse_harmonic_solve` (`Adjoint/SparseHarmonicSolve.cc`), a custom `torch::autograd::Function` with an Eigen `SimplicialLDLT` forward and hand-derived adjoint; the dense `torch::linalg` path is kept as a validation oracle behind `HarmonicOptions::use_sparse_harmonic_solve`
 3. For each overlay triangle, compute the Jacobian of the 3D→2D map
 4. Call `compute_distortion()`, which applies SVD via `torch_singular_values` to the Jacobian and returns a distortion value based on the singular values
 
@@ -109,7 +109,7 @@ After the weighted total loss scalar is assembled in `eval()` (`Optimization.cc`
 loss.backward();
 ```
 
-`compute_gradients` iterates over all free path-network vertices and collects `bary_coords.grad()` — a `[2]`-shaped tensor giving the gradient of the loss with respect to each surface point's barycentric coordinates. Layout-vertex-mapped nodes (which sit on the boundary of the path network and are not free variables) are skipped.
+`compute_gradients` iterates over all path-network vertices and, for face points, collects `bary_coords.grad()` — a `[2]`-shaped tensor giving the gradient of the loss with respect to the point's barycentric coordinates. The free variables are exactly the **layout-node** face points (the only tensors with `requires_grad`); other path-network vertices carry no gradient of their own — their overlay positions are derived from the layout-node leaves via the differentiable intersections, so the chain rule routes their sensitivity back to those leaves automatically.
 
 ---
 

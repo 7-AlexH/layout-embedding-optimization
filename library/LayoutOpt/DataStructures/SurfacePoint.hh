@@ -36,6 +36,15 @@ public:
     pm::halfedge_index heh_idx = pm::halfedge_index::invalid;
     SurfacePointType type = SurfacePointType::Invalid;
 
+    // --- remove-autodiff Phase 3: plain-double mirror of bary_coords ---
+    // Full barycentric weights (alpha, beta, gamma) over the three corners
+    // (hh.from, hh.to, hh.next.to), with the implicit coordinate made explicit:
+    //   vertex -> (1, 0, 0); edge -> (alpha, 1-alpha, 0); face -> (alpha, beta, 1-alpha-beta).
+    // While the torch gradient oracle exists (Phases 3-5) the tensor stays
+    // authoritative and this is derived from it on demand; the flip to a stored
+    // field happens with the torch removal (Phase 5/6, deferred from S1).
+    vec3d bary_full() const;
+
     bool is_vertex_sp() const { return type == SurfacePointType::VertexPoint; }
     bool is_edge_sp() const { return type == SurfacePointType::EdgePoint; }
     bool is_face_sp() const { return type == SurfacePointType::FacePoint; }
@@ -47,6 +56,10 @@ public:
     torch::Tensor get_pos(torch::Tensor const& _pos, pm::Mesh const& _mesh) const;
     torch::Tensor get_pos(pm::vertex_attribute<torch::Tensor> const& _pos) const;
     torch::Tensor get_pos(pm::halfedge_attribute<torch::Tensor> const& _pos) const;
+
+    // remove-autodiff Phase 3: plain-double counterpart of get_pos(torch::Tensor [|V|x3], mesh).
+    // Mirrors the torch path exactly via bary_full(); used by the ported (torch-free) stages.
+    vec3d get_pos(Eigen::MatrixX3d const& _pos, pm::Mesh const& _mesh) const;
 
 
     FH fh(polymesh::Mesh const& _mesh) const;

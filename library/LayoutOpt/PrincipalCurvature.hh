@@ -33,6 +33,13 @@ struct DirectionFieldData
     double confidence; // magnitude is proportional to the squared difference of the 1st and 2nd principal curvatures (κ1−κ2)2
     torch::Tensor basis; //tensor shape [2, 3], ie two 3D vectors
     torch::Tensor dir; //smooth direction field --> a 2D vector raised to the 4th power (4-rosy field), norm = 1
+
+    // remove-autodiff Phase 3-style plain mirrors of basis/dir, filled in
+    // smooth_direction_field from the same doubles the tensors are built from
+    // (bitwise-identical contents). The field is constant w.r.t. the
+    // optimization, so these carry no gradient.
+    Eigen::Matrix<double, 2, 3> basis_eigen;
+    vec2d dir_eigen;
 };
 
 

@@ -12,6 +12,11 @@ struct HarmonicOptions
     double w_I_DevFrom1_SingValDecomp = 0.0; //0.1
     double w_AreaPreserving_SingValDecomp = 0.0; //1.0
 
+    // Phase 1 (remove-autodiff): solve the per-patch harmonic system with an
+    // Eigen sparse factorization + hand-derived adjoint instead of the dense
+    // torch::linalg::solve. The dense path is kept as a validation oracle.
+    bool use_sparse_harmonic_solve = true;
+
     //should not be used
     const bool normalized = false; // is the result normalized per patch param area
     // parameter domain

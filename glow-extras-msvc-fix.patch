@@ -1,0 +1,29 @@
+diff --git a/viewer/glow-extras/viewer/configure.hh b/viewer/glow-extras/viewer/configure.hh
+index 3ab3108..9bc41b7 100644
+--- a/viewer/glow-extras/viewer/configure.hh
++++ b/viewer/glow-extras/viewer/configure.hh
+@@ -12,6 +12,15 @@
+ #include "renderables/GeometricRenderable.hh"
+ #include "traits.hh"
+ 
++// The Windows SDK defines `near` and `far` as empty macros (legacy 16-bit remnants),
++// which silently mangle the `near`/`far` parameter names used below. Undefine them.
++#ifdef near
++#undef near
++#endif
++#ifdef far
++#undef far
++#endif
++
+ // view configuration
+ // is called from the variadic view(obj, ...) function
+ 
+@@ -98,7 +107,7 @@ struct orthogonal_projection
+     tg::aabb3 bounds;
+ 
+     constexpr explicit orthogonal_projection(float left, float right, float bottom, float top, float near, float far)
+-      : bounds{{left, bottom, near}, {right, top, far}}
++      : bounds(tg::pos3(left, bottom, near), tg::pos3(right, top, far)) // explicit pos3: MSVC rejects nested braced-init here
+     {
+     }
+ 
