@@ -3,9 +3,6 @@ build/
 cmake-build-*/
 out/
 
-# Libtorch
-extern/libtorch/
-
 # CMake
 CMakeCache.txt
 CMakeLists.txt.user
