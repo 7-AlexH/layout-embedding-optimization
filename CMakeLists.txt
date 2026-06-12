@@ -6,9 +6,6 @@ set(DATA_PATH "${CMAKE_CURRENT_SOURCE_DIR}/data" CACHE PATH "Data path for vario
 
 set(CMAKE_CXX_STANDARD 17)
 
-# Keep ON until Phase 4 (adjoint port complete). OFF only compiles, does not link, without torch.
-option(LAYOUTOPT_WITH_TORCH "Build with LibTorch autodiff" ON)
-
 # Add -fPIC flag (required to build predicates.c)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
@@ -59,10 +56,6 @@ endif()
 # Warning: The order of these add_subdirectories matters, there are interdependencies.
 set(GLOW_BIN_DIR ${CMAKE_CURRENT_BINARY_DIR}) # Viewer fonts will be placed here
 
-if(LAYOUTOPT_WITH_TORCH)
-    list(APPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/extern/libtorch")
-endif()
-
 if(NOT TARGET glfw)
     add_subdirectory(extern/glfw)
 endif()
@@ -97,17 +90,6 @@ endif()
 
 find_package(OpenMP REQUIRED)
 
-if(LAYOUTOPT_WITH_TORCH)
-    list(PREPEND CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/extern/libtorch") # ensure our libtorch wins over any system install
-    find_package(Torch REQUIRED)
-    message(STATUS "Torch version: ${Torch_VERSION}")
-    # Collect LibTorch's runtime DLLs (Windows) so apps can copy them next to their binaries.
-    if(WIN32)
-        file(GLOB TORCH_DLLS "${CMAKE_CURRENT_SOURCE_DIR}/extern/libtorch/lib/*.dll")
-    endif()
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
-endif()
-
 # Find Eigen if not already present
 if(NOT TARGET Eigen3::Eigen)
     find_package(Eigen3 REQUIRED)
@@ -121,11 +103,6 @@ file(GLOB_RECURSE LIBRARY_SOURCE_FILES
 add_library(LayoutOpt ${LIBRARY_SOURCE_FILES})
 target_link_libraries(LayoutOpt PUBLIC imgui typed-geometry polymesh glow-extras OpenMP::OpenMP_CXX Eigen3::Eigen geometry-central)
 target_include_directories(LayoutOpt PUBLIC library extern/libigl/include)
-if(LAYOUTOPT_WITH_TORCH)
-    target_link_libraries(LayoutOpt PUBLIC ${TORCH_LIBRARIES})
-    target_include_directories(LayoutOpt PUBLIC ${TORCH_INCLUDE_DIRS})
-    target_compile_definitions(LayoutOpt PUBLIC LAYOUTOPT_WITH_TORCH)
-endif()
 # Eigen 3.4 is required for the Eigen::Vector3<T>/Vector2<T> template aliases used in
 # Types.hh. geometry-central bundles Eigen 3.3.9, so prepend our 3.4 copy (BEFORE) to
 # win the header search over geometry-central's interface include dir.
@@ -148,22 +125,10 @@ foreach(APP_SOURCE_FILE ${APP_SOURCE_FILES})
     add_executable(${APP_NAME} ${APP_SOURCE_FILE})
     target_link_libraries(${APP_NAME} PRIVATE LayoutOpt)
 
-    # LibTorch's autograd graph is destroyed recursively (one stack frame per
-    # node), and the objective builds long element-wise tensor chains, so graph
-    # depth scales with mesh size. Windows' default 1 MB stack overflows on
-    # spot.obj (Linux defaults to 8 MB). Reserve 64 MB like on a typical
-    # workstation Linux setup with `ulimit -s unlimited`-ish headroom.
+    # Some mesh algorithms here recurse deeply on large inputs; Windows'
+    # default 1 MB stack is much smaller than Linux's 8 MB. Reserve 64 MB
+    # for headroom.
     if(MSVC)
         target_link_options(${APP_NAME} PRIVATE "/STACK:67108864")
-    endif()
-
-    # On Windows, LibTorch ships its runtime as DLLs that must sit next to the
-    # executable (or on PATH). Copy them into the output dir after each build so
-    # the apps are runnable directly.
-    if(WIN32 AND LAYOUTOPT_WITH_TORCH AND TORCH_DLLS)
-        add_custom_command(TARGET ${APP_NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${TORCH_DLLS} $<TARGET_FILE_DIR:${APP_NAME}>
-            COMMAND_EXPAND_LISTS)
     endif()
 endforeach()

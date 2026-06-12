@@ -116,3 +116,37 @@ dominates eval/backprop cost, not the solve — that graph is what the later
 phases remove. The qualitative win of Phase 1 is correctness: the
 ABI-violating MKL dense-solve kernel (xmm14/15 clobber) is no longer in the
 production path.
+
+## Phase 6 final timings (2026-06-11, Windows/MSVC-Release)
+
+Captured after Phase 6 completion: torch fully deleted and unlinked, gradients
+from the hand adjoint chain (`Adjoint/HandGradients.*`), the per-patch S6+S7
+forward loop OpenMP-parallel (deterministic: per-patch slots + sequential
+patch-order reduction; gated bitwise by `e2e_determinism`). Same protocol as
+Phase 0: `optimize.exe`, 20 iterations, no screenshots, headless.
+
+| Model | EvalObjective (ms/iter) | Backpropagation (ms/iter) | Update (ms/iter) | Embedding (ms/iter) | Notes |
+|---|---|---|---|---|---|
+| Spot | 13.6 | 17.1 | 0.79 | 28457 | total run ≈9.5 min (Phase 0: ≈140 min) |
+| Banana | 7.7 | 4.8 | 0.35 | 1305 | total run ≈27 s (Phase 0: ≈13 min) |
+
+Deltas vs the Phase 0 torch baseline:
+
+| Model | EvalObjective | Backpropagation | Update | Embedding |
+|---|---|---|---|---|
+| Spot | **×1980 faster** (26907 → 13.6) | **×4240 faster** (72525 → 17.1) | ×139 (110 → 0.79) | ×11 (319383 → 28457) |
+| Banana | **×780 faster** (6012 → 7.7) | **×3240 faster** (15568 → 4.8) | ×60 (21 → 0.35) | ×13 (17453 → 1305) |
+
+The eval+backward cost that motivated the project (torch graph construction +
+destruction + element-wise kernels) is gone — three-plus orders of magnitude,
+beyond the "order(s) of magnitude" the plan projected. Embedding (the
+re-embedding inside apply: strip flattening, path tracing, overlay rebuild)
+got its ~12× from the Phase 5 de-torchification of its per-element tensor
+traffic and now utterly dominates wall-clock (>99%); further speedups would
+have to come from that stage, which is outside this project's scope.
+
+Correctness at these numbers is pinned by the two permanent harnesses on the
+banana pair (both PASS on the final build): `gradcheck_fd` (hand vs central
+FD, worst ratio 0.017 of the 1e-5 gate) and `e2e_determinism` (two production
+runs bitwise EQ per iteration; iter-0 loss 1.2734862918788759 vs the Phase 3
+torch-era reference 1.2734862918788761, |Δ| = 1 ulp = 2.2e-16).

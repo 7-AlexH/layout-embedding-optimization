@@ -1,5 +1,8 @@
 #pragma once
+#include <vector>
+
 #include "LayoutOpt/DataStructures/LayoutEmbedding.hh"
+#include "LayoutOpt/DataStructures/TriangleStrip.hh"
 #include "LayoutOpt/DataStructures/Types.hh"
 namespace LayoutOpt
 {
@@ -13,7 +16,15 @@ void compute_mapping_overlay_to_layout(OverlayMeshData& _omd, LayoutData const& 
 void collapse_pn_to_layout(PathNetworkData& _pnd);
 void reset_embedding_data(LayoutData& _ld, PathNetworkData& _pnd, OverlayMeshData& _omd);
 
-void sync_tg_and_torch(OverlayMeshData& _omd);
+// Computes the overlay positions: overwrites the layout-node rows (S1 leaf
+// interpolation) and the interior arc rows (S3 strip intersection) of pos_,
+// then refreshes pos_mat_ in lockstep. Requires the overlay mappings to be
+// computed.
+void compute_overlay_positions(std::vector<TriangleStrip> const& _strips,
+                               TargetMeshData const& _tmd,
+                               LayoutData const& _ld,
+                               PathNetworkData const& _pnd,
+                               OverlayMeshData& _omd);
 
 //=============================================================================================
 //=================================addidtional information=====================================
@@ -21,7 +32,6 @@ void sync_tg_and_torch(OverlayMeshData& _omd);
 
 /// @short find the coarsest sturcutre, assigning the same label to layout edges that actually just subdivide (ie where the vertices are not singularities)
 pm::edge_attribute<int> compute_layout_edge_arc_idx(LayoutData const& _ld);
-torch::Tensor torch_compute_layout_edge_arc_idx(LayoutData const& _ld);
 
 pm::edge_attribute<double> compute_embedded_length_per_layout_edge(TargetMeshData const& _tmd, LayoutData const& _ld, PathNetworkData const& _pnd);
 

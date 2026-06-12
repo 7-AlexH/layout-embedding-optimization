@@ -58,11 +58,7 @@ void leaf_collect(std::vector<TriangleStrip> const& _strips,
             rec.pn_v = pn_vh.idx.value;
             rec.type = sp.type;
 
-            auto load = [&](pm::halfedge_handle h)
-            {
-                auto acc = strip.heh_pos_2d[h].accessor<double, 1>();
-                return vec2d(acc[0], acc[1]);
-            };
+            auto load = [&](pm::halfedge_handle h) { return strip.heh_pos_2d[h].value(); };
             if (sp.type == SurfacePointType::VertexPoint)
                 rec.A2 = load(hh);
             else if (sp.type == SurfacePointType::EdgePoint)

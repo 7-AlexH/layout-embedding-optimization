@@ -22,16 +22,10 @@ public:
     std::optional<pm::face_attribute<double>> point_wise_gauss_curvature_;
     std::optional<pm::face_attribute<double>> point_wise_mean_curvature_;
 
-    //semi torch
     std::optional<pm::face_attribute<DirectionFieldData>> direction_field_data_;
 
-    // torch
-    torch::Tensor torch_pos_;                                       // torch format of pos_
-    // remove-autodiff Phase 3: plain-double mirror of torch_pos_ (|V| x 3), set once in ctor.
+    // plain-double matrix form of pos_ (|V| x 3), set once in ctor
     Eigen::MatrixX3d pos_mat_;
-    std::optional<torch::Tensor> torch_scalar_field_;               // per face
-    std::optional<torch::Tensor> torch_point_wise_gauss_curvature_; // per face
-    std::optional<torch::Tensor> torch_point_wise_mean_curvature_;  // per face
 };
 
 // stores all information about the layout
@@ -46,10 +40,7 @@ public:
 
     std::optional<pm::vertex_attribute<pm::vertex_index>> map_to_overlay_vertices_;
 
-    // used for harmonic param, in a differentiable way
-    std::optional<torch::Tensor> torch_embedded_edge_length_;
-    // remove-autodiff Phase 3: plain-double mirror of torch_embedded_edge_length_,
-    // indexed by layout-edge idx (same layout as the torch tensor).
+    // used for harmonic param; indexed by layout-edge idx
     std::optional<Eigen::VectorXd> embedded_edge_length_;
 };
 
@@ -69,12 +60,7 @@ public:
     std::optional<pm::halfedge_attribute<double>> t_;
     std::optional<pm::halfedge_attribute<pos2>> uvs_;
 
-    // used for harmonic param, t and uvs are computed in a differentiable way
-    std::optional<torch::Tensor> torch_t_;
-    std::optional<torch::Tensor> torch_uvs_;
-
-    // remove-autodiff Phase 3: plain-double mirrors of torch_t_/torch_uvs_, flat
-    // and indexed by path-network halfedge idx (same layout as the torch tensors).
+    // used for harmonic param; flat, indexed by path-network halfedge idx
     std::optional<Eigen::VectorXd> t_flat_;     // [#pn_heh]
     std::optional<Eigen::MatrixX2d> uvs_flat_;  // [#pn_heh x 2]
 
@@ -101,10 +87,8 @@ public:
     std::optional<pm::face_attribute<pm::face_index>> map_to_target_faces_;
     std::optional<pm::face_attribute<pm::face_index>> map_to_layout_faces_; // corresponding to patch labels
 
-    // torch
-    std::optional<torch::Tensor> torch_pos_;
-    // remove-autodiff Phase 3: plain-double mirror of torch_pos_ (|V| x 3),
-    // refreshed in sync_tg_and_torch alongside pos_.
+    // plain-double matrix form of pos_ (|V| x 3), refreshed in
+    // compute_overlay_positions alongside pos_
     std::optional<Eigen::MatrixX3d> pos_mat_;
 
     //============================================================================

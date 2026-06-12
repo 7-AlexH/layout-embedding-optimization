@@ -40,10 +40,8 @@ void intersections_forward(std::vector<TriangleStrip> const& _strips,
             auto intersect_hh = _tmd.mesh_->handle_of(_pnd.sp_on_target_.value()[intersect_pn_vh].heh_idx);
 
             // the crossed target edge, flattened (constant per the Phase 2 audit)
-            auto from_2D_acc = strip.heh_pos_2d[intersect_hh].accessor<double, 1>();
-            auto to_2D_acc = strip.heh_pos_2d[intersect_hh.opposite()].accessor<double, 1>();
-            vec2d const from_2D(from_2D_acc[0], from_2D_acc[1]);
-            vec2d const to_2D(to_2D_acc[0], to_2D_acc[1]);
+            vec2d const from_2D = strip.heh_pos_2d[intersect_hh].value();
+            vec2d const to_2D = strip.heh_pos_2d[intersect_hh.opposite()].value();
 
             IntersectionRec rec;
             rec.o_row = _pnd.map_to_overlay_vertices_.value()[intersect_pn_vh].value;

@@ -1,9 +1,8 @@
 #include "SurfacePoint.hh"
-#include "../TorchUtils.hh"
 namespace LayoutOpt
 {
 
-SurfacePoint SurfacePoint::copy() const { return {bary_coords.clone().detach(), heh_idx, type}; }
+SurfacePoint SurfacePoint::copy() const { return *this; }
 
 FH SurfacePoint::fh(polymesh::Mesh const& _mesh) const { return _mesh.handle_of(heh_idx).face(); }
 
@@ -15,8 +14,7 @@ bool SurfacePoint::is_inside_element()
     }
     if (type == SurfacePointType::EdgePoint)
     {
-        // FacePoint: Compute c = 1 - a - b
-        double a = bary_coords[0].item<double>();
+        double a = bary_params.x();
         double b = 1.0 - a;
 
         return (a >= 0.0 && a <= 1.0 && b >= 0.0 && b <= 1.0);
@@ -24,161 +22,13 @@ bool SurfacePoint::is_inside_element()
     if (type == SurfacePointType::FacePoint)
     {
         // FacePoint: Compute c = 1 - a - b
-        double a = bary_coords[0].item<double>();
-        double b = bary_coords[1].item<double>();
+        double a = bary_params.x();
+        double b = bary_params.y();
         double c = 1.0 - a - b;
 
         return (a >= 0.0 && a <= 1.0 && b >= 0.0 && b <= 1.0 && c >= 0.0 && c <= 1.0);
     }
     return false;
-}
-
-void SurfacePoint::is_tensor_valid() const
-{
-    if (type == SurfacePointType::VertexPoint)
-    {
-        // there are no bary coords, so no need to check dimensions
-        return;
-    }
-    if (type == SurfacePointType::EdgePoint)
-    {
-        // Assert tensor is scalar (0-dimensional)
-        assert(bary_coords.dim() == 1 && bary_coords.size(0) == 1 && "Tensor must be scalar for EdgePoint");
-    }
-    else if (type == SurfacePointType::FacePoint)
-    {
-        // Assert tensor is a vector with 2 entries
-        assert(bary_coords.dim() == 1 && bary_coords.size(0) == 2 && "Tensor must be a vector with 2 entries for FacePoint");
-    }
-    else
-    {
-        throw std::invalid_argument("Invalid SurfacePointType");
-    }
-}
-
-
-at::Tensor LayoutOpt::SurfacePoint::get_pos(at::Tensor const& _pos, polymesh::Mesh const& _mesh) const
-{
-    // assertion
-    is_tensor_valid();
-
-    if (type == SurfacePointType::VertexPoint)
-    {
-        auto hh = _mesh.handle_of(heh_idx);
-        auto vh_A = hh.vertex_from();
-
-        auto A = get_row(_pos, vh_A.idx.value);
-
-        return get_pos_intern(A);
-    }
-    else if (type == SurfacePointType::EdgePoint)
-    {
-        auto hh = _mesh.handle_of(heh_idx);
-        auto vh_A = hh.vertex_from();
-        auto vh_B = hh.vertex_to();
-
-        auto A = get_row(_pos, vh_A.idx.value);
-        auto B = get_row(_pos, vh_B.idx.value);
-
-        return get_pos_intern(A, B);
-    }
-    else if (type == SurfacePointType::FacePoint)
-    {
-        auto hh = _mesh.handle_of(heh_idx);
-        auto vh_A = hh.vertex_from();
-        auto vh_B = hh.vertex_to();
-        auto vh_C = hh.next().vertex_to();
-
-        auto A = get_row(_pos, vh_A.idx.value);
-        auto B = get_row(_pos, vh_B.idx.value);
-        auto C = get_row(_pos, vh_C.idx.value);
-
-        auto alpha = bary_coords[0];
-        auto beta = bary_coords[1];
-
-        return get_pos_intern(A, B, C);
-    }
-
-    assert(false && "should not be reached");
-    return {};
-}
-
-at::Tensor SurfacePoint::get_pos(pm::vertex_attribute<at::Tensor> const& _pos) const
-{
-    // assertion
-    is_tensor_valid();
-
-    if (type == SurfacePointType::VertexPoint)
-    {
-        auto hh = _pos.mesh().handle_of(heh_idx);
-        auto vh_A = hh.vertex_from();
-
-        auto A = _pos[vh_A];
-
-        return get_pos_intern(A);
-    }
-    else if (type == SurfacePointType::EdgePoint)
-    {
-        auto hh = _pos.mesh().handle_of(heh_idx);
-        auto vh_A = hh.vertex_from();
-        auto vh_B = hh.vertex_to();
-
-        auto A = _pos[vh_A];
-        auto B = _pos[vh_B];
-
-        return get_pos_intern(A, B);
-    }
-    else if (type == SurfacePointType::FacePoint)
-    {
-        auto hh = _pos.mesh().handle_of(heh_idx);
-        auto vh_A = hh.vertex_from();
-        auto vh_B = hh.vertex_to();
-        auto vh_C = hh.next().vertex_to();
-
-        auto A = _pos[vh_A];
-        auto B = _pos[vh_B];
-        auto C = _pos[vh_C];
-
-        return get_pos_intern(A, B, C);
-    }
-
-    assert(false && "should not be reached");
-    return {};
-}
-
-at::Tensor SurfacePoint::get_pos(pm::halfedge_attribute<at::Tensor> const& _pos) const
-{
-    // assertion
-    is_tensor_valid();
-
-    if (type == SurfacePointType::VertexPoint)
-    {
-        auto hh = _pos.mesh().handle_of(heh_idx);
-        auto A = _pos[hh];
-
-        return get_pos_intern(A);
-    }
-    else if (type == SurfacePointType::EdgePoint)
-    {
-        auto hh = _pos.mesh().handle_of(heh_idx);
-        auto A = _pos[hh];
-        auto B = _pos[hh.opposite()];
-
-        return get_pos_intern(A, B);
-    }
-    else if (type == SurfacePointType::FacePoint)
-    {
-        auto hh = _pos.mesh().handle_of(heh_idx);
-
-        auto A = _pos[hh];
-        auto B = _pos[hh.next()];
-        auto C = _pos[hh.next().next()];
-
-        return get_pos_intern(A, B, C);
-    }
-
-    assert(false && "should not be reached");
-    return {};
 }
 
 vec3d SurfacePoint::bary_full() const
@@ -189,13 +39,13 @@ vec3d SurfacePoint::bary_full() const
         return vec3d(1.0, 0.0, 0.0);
     case SurfacePointType::EdgePoint:
     {
-        double const a = bary_coords[0].item<double>();
+        double const a = bary_params.x();
         return vec3d(a, 1.0 - a, 0.0);
     }
     case SurfacePointType::FacePoint:
     {
-        double const a = bary_coords[0].item<double>();
-        double const b = bary_coords[1].item<double>();
+        double const a = bary_params.x();
+        double const b = bary_params.y();
         return vec3d(a, b, 1.0 - a - b);
     }
     default:
@@ -205,14 +55,11 @@ vec3d SurfacePoint::bary_full() const
 
 vec3d SurfacePoint::get_pos(Eigen::MatrixX3d const& _pos, polymesh::Mesh const& _mesh) const
 {
-    // assertion (tensor shape is still authoritative during Phases 3-5)
-    is_tensor_valid();
-
     vec3d const b = bary_full();
     auto const hh = _mesh.handle_of(heh_idx);
 
     // The three face corners. For vertex/edge points the unused corners carry a
-    // zero weight in b, so a single weighted sum reproduces every get_pos_intern overload.
+    // zero weight in b, so a single weighted sum covers all surface point types.
     Eigen::RowVector3d const A = _pos.row(hh.vertex_from().idx.value);
     Eigen::RowVector3d const B = _pos.row(hh.vertex_to().idx.value);
     Eigen::RowVector3d const C = _pos.row(hh.next().vertex_to().idx.value);
@@ -220,16 +67,45 @@ vec3d SurfacePoint::get_pos(Eigen::MatrixX3d const& _pos, polymesh::Mesh const& 
     return (b[0] * A + b[1] * B + b[2] * C).transpose();
 }
 
-at::Tensor SurfacePoint::get_pos_intern(at::Tensor const& A) const { return A; }
-at::Tensor SurfacePoint::get_pos_intern(at::Tensor const& A, at::Tensor const& B) const { return bary_coords * A + (1.0 - bary_coords) * B; }
-at::Tensor SurfacePoint::get_pos_intern(at::Tensor const& A, at::Tensor const& B, at::Tensor const& C) const
+vec2d SurfacePoint::get_pos(pm::halfedge_attribute<std::optional<vec2d>> const& _pos) const
 {
-    auto alpha = bary_coords[0];
-    auto beta = bary_coords[1];
+    auto const hh = _pos.mesh().handle_of(heh_idx);
+    vec3d const b = bary_full();
 
-    return alpha * A + beta * B + (1.0 - alpha - beta) * C;
+    // Corner convention of the halfedge-attribute overload: the position is
+    // associated with vertex_from, so corners are read off successive halfedges
+    // (NOT vertex indices): vertex -> hh; edge -> hh, hh.opposite(); face -> hh,
+    // hh.next(), hh.next().next(). The unused corners carry zero weight in b.
+    if (type == SurfacePointType::VertexPoint)
+    {
+        return _pos[hh].value();
+    }
+    else if (type == SurfacePointType::EdgePoint)
+    {
+        return b[0] * _pos[hh].value() + b[1] * _pos[hh.opposite()].value();
+    }
+    else if (type == SurfacePointType::FacePoint)
+    {
+        return b[0] * _pos[hh].value() + b[1] * _pos[hh.next()].value() + b[2] * _pos[hh.next().next()].value();
+    }
+
+    assert(false && "should not be reached");
+    return vec2d::Zero();
 }
+
+vec2d SurfacePoint::get_pos(Eigen::MatrixX2d const& _pos, polymesh::Mesh const& _mesh) const
+{
+    vec3d const b = bary_full();
+    auto const hh = _mesh.handle_of(heh_idx);
+
+    Eigen::RowVector2d const A = _pos.row(hh.vertex_from().idx.value);
+    Eigen::RowVector2d const B = _pos.row(hh.vertex_to().idx.value);
+    Eigen::RowVector2d const C = _pos.row(hh.next().vertex_to().idx.value);
+
+    return (b[0] * A + b[1] * B + b[2] * C).transpose();
+}
+
 // special values
-SurfacePoint const SurfacePoint::invalid = SurfacePoint(torch::Tensor(), pm::halfedge_index::invalid, SurfacePointType::Invalid);
+SurfacePoint const SurfacePoint::invalid = SurfacePoint(vec2d::Zero(), pm::halfedge_index::invalid, SurfacePointType::Invalid);
 
 } // namespace LayoutOpt

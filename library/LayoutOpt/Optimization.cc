@@ -1,4 +1,5 @@
 #include "LayoutOpt/Optimization.hh"
+#include "LayoutOpt/Adjoint/HandGradients.hh"
 #include "LayoutOpt/Embedding.hh"
 #include "LayoutOpt/EmbeddingUtils.hh"
 #include "LayoutOpt/ObjectiveFunctions.hh"
@@ -12,74 +13,62 @@
 namespace LayoutOpt
 {
 
-EvalInfo eval(TargetMeshData& _tmd, LayoutData& _ld, PathNetworkData& _pnd, OverlayMeshData& _omd, OptimizationOptions const& _opts, int i, OptimizerData& _od)
+EvalInfo eval(TargetMeshData& _tmd,
+              LayoutData& _ld,
+              PathNetworkData& _pnd,
+              OverlayMeshData& _omd,
+              std::vector<TriangleStrip> const& _strips,
+              OptimizationOptions const& _opts,
+              int i,
+              OptimizerData& _od)
 {
     // DEBUG_OUT("iteration " << i << ":")
 
     EvalInfo eval_info;
 
+    // remove-autodiff Phase 6b: the hand-rolled adjoint chain replaces the
+    // torch loss + autograd (leaf_collect -> hand_loss_forward ->
+    // hand_loss_backward, see Adjoint/HandGradients.hh). Loss assembly inside
+    // hand_loss_forward matches the old eval() order: w_h * harmonic +
+    // w_c * curvature.
     timers.start(TimerCollection::EvalObjective);
+    LeafCtx leaf;
+    leaf_collect(_strips, _tmd, _ld, _pnd, leaf);
+    Eigen::MatrixX2d const bary = collect_bary(_pnd);
 
-    torch::Tensor loss = torch::zeros({}, torch::dtype(torch::kFloat64));
-    if (_opts.w_harmonic_distorion_loss > 0)
-    {
-        auto loss_harmonic_distortion = _opts.w_harmonic_distorion_loss * harmonic_distortion_loss(_tmd, _ld, _pnd, _omd, _opts.harmonic_options, eval_info);
-        loss = loss + loss_harmonic_distortion;
-
-        // DEBUG_OUT("harmonic_distortion_loss: " << loss_harmonic_distortion.item<double>())
-    }
-
-    if (_opts.w_curvature_alignment_loss > 0)
-    {
-        auto loss_curvature_alignment = _opts.w_curvature_alignment_loss * principal_curvature_alignment_loss(_tmd, _ld, _pnd, _omd, eval_info);
-        loss = loss + loss_curvature_alignment;
-        // DEBUG_OUT("curvature_alignment_loss: " << loss_curvature_alignment.item<double>())
-    }
-
-    // if (_opts.w_repel_loss > 0)
-    // {
-    //     auto loss_repel = repel_loss_v2(_ld, _pnd, _omd);
-    //     loss = loss + loss_repel;
-    //     DEBUG_OUT("repel_loss: " << loss_repel.item<double>())
-    // }
-
-    // if (_opts.w_variance_loss > 0)
-    // {
-    //     auto loss_variance = _opts.w_variance_loss * variance_loss(_tmd, _ld, _omd, eval_info);
-    //     loss = loss + loss_variance;
-    //     DEBUG_OUT("variance_loss: " << loss_variance.item<double>())
-    // }
-    // if (_opts.w_yamabe_loss > 0)
-    // {
-    //     auto loss_distortion = _opts.w_yamabe_loss * distorion_loss(_tmd, _ld, _omd, eval_info);
-    //     loss = loss + loss_distortion;
-    //     DEBUG_OUT("distortion_loss: " << loss_distortion.item<double>())
-    // }
-    // if (_opts.w_distortion_loss_extrinsic > 0)
-    // {
-    //     auto loss_distortion_extr = _opts.w_distortion_loss_extrinsic * distorion_loss_extrinsic(_tmd, _ld, _omd, eval_info);
-    //     loss = loss + loss_distortion_extr;
-    //     DEBUG_OUT("distortion_extr_loss: " << loss_distortion_extr.item<double>())
-    // }
-    // if (_opts.w_total_length_loss > 0)
-    // {
-    //     auto loss_total_length = _opts.w_total_length_loss * total_length_loss(_pnd, _omd);
-    //     loss = loss + loss_total_length;
-    //     DEBUG_OUT("length_loss: " << loss_total_length.item<double>())
-    // }
-    // if (_opts.w_inner_angle_loss > 0)
-    // {
-    //     auto loss_inner_angle = inner_angle_loss(_pnd, _omd);
-    //     loss = loss + loss_inner_angle;
-
-    //     DEBUG_OUT("inner_angle_loss: " << loss_inner_angle.item<double>())
-    // }
-
+    HandLossCtx ctx;
+    hand_loss_forward(leaf, bary, _strips, _tmd, _ld, _pnd, _omd, _opts, ctx);
     timers.stop(TimerCollection::EvalObjective);
 
-    // DEBUG_OUT("loss: " << loss.item<double>())
+    eval_info.loss = ctx.loss;
 
-    eval_info.loss = loss.item<double>();
+    // visualization fields (parity with the old torch loss): per-face
+    // distortion and per-corner patch UVs
+    if (_opts.w_harmonic_distorion_loss > 0)
+    {
+        eval_info.o_distortion_harmonic = _omd.mesh_->faces().make_attribute<double>(0.0);
+        eval_info.o_uvs = _omd.mesh_->halfedges().make_attribute<pos2>();
+        for (size_t p = 0; p < ctx.patch_fhs.size(); ++p)
+        {
+            for (size_t k = 0; k < ctx.patch_fhs[p].size(); ++k)
+            {
+                auto o_fh = ctx.patch_fhs[p][k];
+                FaceDistortionCtx const& fc = ctx.sctx[p].faces[k];
+
+                auto hehA = o_fh.any_halfedge();
+                HEH const hehs[3] = {hehA, hehA.next(), hehA.next().next()};
+                for (int c = 0; c < 3; ++c)
+                {
+                    MappingIndex const& mi = fc.uv[c];
+                    vec2d const v = mi.on_boundary ? ctx.bnd_uvs[p][mi.idx] : vec2d(ctx.hctx[p].inner_uvs.row(mi.idx).transpose());
+                    eval_info.o_uvs[hehs[c]] = pos2(v.x(), v.y());
+                }
+                eval_info.o_distortion_harmonic[o_fh] = fc.distortion;
+            }
+        }
+    }
+
+    // DEBUG_OUT("loss: " << eval_info.loss)
 
     if (eval_info.loss < std::numeric_limits<double>::max() || tg::is_nan(eval_info.loss))
     {
@@ -92,22 +81,32 @@ EvalInfo eval(TargetMeshData& _tmd, LayoutData& _ld, PathNetworkData& _pnd, Over
     }
 
     timers.start(TimerCollection::Backpropagation);
-    eval_info.pn_sp_grads = compute_gradients(loss, _pnd);
+    Eigen::MatrixX2d d_bary = Eigen::MatrixX2d::Zero(bary.rows(), 2);
+    hand_loss_backward(ctx, leaf, _tmd, _opts, d_bary);
     timers.stop(TimerCollection::Backpropagation);
-    // preprocess_gradients(_tmd, _pnd, eval_info.pn_sp_grads);
+
+    // gradient collection convention (matches the old compute_gradients seam):
+    // zero default, only FacePoint surface points carry a gradient
+    auto grads = _pnd.mesh_->vertices().make_attribute<vec2d>(vec2d::Zero());
+    for (auto pn_vh : _pnd.mesh_->vertices())
+    {
+        if (_pnd.sp_on_target_.value()[pn_vh].type == SurfacePointType::FacePoint)
+            grads[pn_vh] = vec2d(d_bary(pn_vh.idx.value, 0), d_bary(pn_vh.idx.value, 1));
+    }
+    // preprocess_gradients(_tmd, _pnd, grads);
 
     switch (_opts.optimizer)
     {
     case LayoutOpt::Optimizer::GradientDescent:
     {
         DEBUG_OUT("gradient descent!");
-        eval_info.pn_sp_update_dirs = gradient_descent(_pnd, eval_info.pn_sp_grads, _od);
+        eval_info.pn_sp_update_dirs = gradient_descent(_pnd, grads, _od);
         break;
     }
     case LayoutOpt::Optimizer::Adam:
     {
         // DEBUG_OUT("adam");
-        eval_info.pn_sp_update_dirs = vector_adam_updates(_tmd, _pnd, eval_info.pn_sp_grads, _od);
+        eval_info.pn_sp_update_dirs = vector_adam_updates(_tmd, _pnd, grads, _od);
         break;
     }
     }
@@ -115,7 +114,13 @@ EvalInfo eval(TargetMeshData& _tmd, LayoutData& _ld, PathNetworkData& _pnd, Over
     return eval_info;
 }
 
-void apply(TargetMeshData const& _tmd, LayoutData& _ld, PathNetworkData& _pnd, OverlayMeshData& _omd, OptimizerData& _od, EvalInfo const& _eval_info)
+void apply(TargetMeshData const& _tmd,
+           LayoutData& _ld,
+           PathNetworkData& _pnd,
+           OverlayMeshData& _omd,
+           OptimizerData& _od,
+           EvalInfo const& _eval_info,
+           std::vector<TriangleStrip>* _strips_out)
 {
     timers.start(TimerCollection::Update);
     // DEBUG_OUT("collapse")
@@ -127,7 +132,7 @@ void apply(TargetMeshData const& _tmd, LayoutData& _ld, PathNetworkData& _pnd, O
 
     timers.start(TimerCollection::Embedding);
     // DEBUG_OUT("embed")
-    compute_layout_embedding_update(_tmd, _ld, _pnd, _omd);
+    compute_layout_embedding_update(_tmd, _ld, _pnd, _omd, _strips_out);
     timers.stop(TimerCollection::Embedding);
 }
 

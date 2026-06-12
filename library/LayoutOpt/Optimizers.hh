@@ -1,6 +1,5 @@
 #pragma once
 
-#include <torch/serialize/input-archive.h>
 #include <polymesh/Mesh.hh>
 #include "LayoutOpt/DataStructures/LayoutEmbedding.hh"
 
@@ -17,25 +16,19 @@ struct OptimizerData
     double beta2 = 0.0;
     double epsilon = 0.0;
 
-    pm::vertex_attribute<at::Tensor> m; // First moment vector (R²)
-    pm::vertex_attribute<at::Tensor> v; // Second moment vector (R)
-
-    // remove-autodiff Phase 3: plain-double counterparts of m/v. These are
-    // detached optimizer state (no autograd), so they carry no gradient; the
-    // per-step writes are wired in Phase 5 when the optimizer is de-torchified.
-    pm::vertex_attribute<vec2d> m_eigen;  // First moment vector (R²)
-    pm::vertex_attribute<double> v_eigen; // Second moment vector (R)
+    pm::vertex_attribute<vec2d> m;  // First moment vector (R²)
+    pm::vertex_attribute<double> v; // Second moment vector (R)
 
     void init_vetor_adam_param(pm::Mesh const& _mesh, double _step_size = 0.01);
 };
 
-pm::vertex_attribute<at::Tensor> gradient_descent(PathNetworkData const& _pnd, pm::vertex_attribute<at::Tensor> const& _gradients, OptimizerData& _od);
-pm::vertex_attribute<at::Tensor> vector_adam_updates(TargetMeshData const& _tmd,
-                                                     PathNetworkData const& _pnd,
-                                                     pm::vertex_attribute<at::Tensor> const& _gradients,
-                                                     OptimizerData& _od);
+pm::vertex_attribute<vec2d> gradient_descent(PathNetworkData const& _pnd, pm::vertex_attribute<vec2d> const& _gradients, OptimizerData& _od);
+pm::vertex_attribute<vec2d> vector_adam_updates(TargetMeshData const& _tmd,
+                                                PathNetworkData const& _pnd,
+                                                pm::vertex_attribute<vec2d> const& _gradients,
+                                                OptimizerData& _od);
 
 // check if a gradient in world space is very large compared to the others and caps it
-void preprocess_gradients(TargetMeshData const& _tmd, PathNetworkData const& _pnd, pm::vertex_attribute<at::Tensor>& _gradients);
+void preprocess_gradients(TargetMeshData const& _tmd, PathNetworkData const& _pnd, pm::vertex_attribute<vec2d>& _gradients);
 
 } // namespace LayoutOpt

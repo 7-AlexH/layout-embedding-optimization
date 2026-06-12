@@ -103,15 +103,10 @@ pm::face_attribute<DirectionFieldData> smooth_direction_field(pm::vertex_attribu
         auto basisX = basis[0];
         auto basisY = basis[1];
 
-        auto t_basisX = torch::tensor({basisX.x, basisX.y, basisX.z}, torch::dtype(torch::kFloat64));
-        auto t_basisY = torch::tensor({basisY.x, basisY.y, basisY.z}, torch::dtype(torch::kFloat64));
-
-        dir_field_data[fh].basis = torch::stack({t_basisX, t_basisY});
         dir_field_data[fh].basis_eigen << basisX.x, basisX.y, basisX.z, //
             basisY.x, basisY.y, basisY.z;
 
         // 3.3 dir
-        dir_field_data[fh].dir = torch::tensor({aligned_direction_field[f].x, aligned_direction_field[f].y}, torch::dtype(torch::kFloat64));
         dir_field_data[fh].dir_eigen = vec2d(aligned_direction_field[f].x, aligned_direction_field[f].y);
     }
     return dir_field_data;

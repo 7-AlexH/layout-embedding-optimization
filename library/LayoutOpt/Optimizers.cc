@@ -1,18 +1,41 @@
 #include "Optimizers.hh"
-#include <glow-extras/viewer/canvas.hh>
-#include "LayoutOpt/TorchUtils.hh"
+
+#include <algorithm>
+#include <cmath>
+#include <iostream>
+#include <vector>
+
 #include "LayoutOpt/Utils/Debug.hh"
-#include "LayoutOpt/Visualization/Colors.hh"
 
 namespace LayoutOpt
 {
 
-pm::vertex_attribute<at::Tensor> gradient_descent(PathNetworkData const& _pnd, pm::vertex_attribute<at::Tensor> const& _gradients, OptimizerData& _od)
+namespace
 {
-    pm::vertex_attribute<at::Tensor> dirs(_gradients.mesh());
+
+// The three corners of the face the surface point lives on (rows of _pos by
+// vertex idx, in the order vertex_from, vertex_to, next().vertex_to()).
+struct FaceCorners
+{
+    vec3d A, B, C;
+};
+
+FaceCorners face_corners(SurfacePoint const& _sp, TargetMeshData const& _tmd)
+{
+    auto const hh = _tmd.mesh_->handle_of(_sp.heh_idx);
+    return {_tmd.pos_mat_.row(hh.vertex_from().idx.value).transpose(),
+            _tmd.pos_mat_.row(hh.vertex_to().idx.value).transpose(),
+            _tmd.pos_mat_.row(hh.next().vertex_to().idx.value).transpose()};
+}
+
+} // namespace
+
+pm::vertex_attribute<vec2d> gradient_descent(PathNetworkData const& _pnd, pm::vertex_attribute<vec2d> const& _gradients, OptimizerData& _od)
+{
+    pm::vertex_attribute<vec2d> dirs(_gradients.mesh());
     for (auto pn_vh : _pnd.mesh_->vertices())
     {
-        dirs[pn_vh] = torch::tensor({0.0, 0.0}, torch::dtype(torch::kFloat64));
+        dirs[pn_vh] = vec2d::Zero();
         if (_pnd.map_to_layout_vertices_[pn_vh].is_invalid())
             continue;
         dirs[pn_vh] = -_od.step_size * _gradients[pn_vh];
@@ -28,45 +51,47 @@ void OptimizerData::init_vetor_adam_param(polymesh::Mesh const& _mesh, double _s
     beta2 = 0.9;
     epsilon = 1e-8;
 
-    m = _mesh.vertices().make_attribute<torch::Tensor>(torch::zeros({2}));
-    v = _mesh.vertices().make_attribute<torch::Tensor>(torch::zeros({}));
-
-    // remove-autodiff Phase 3: plain-double mirrors, zero-initialized (Phase 5 wires per-step writes).
-    m_eigen = _mesh.vertices().make_attribute<vec2d>(vec2d::Zero());
-    v_eigen = _mesh.vertices().make_attribute<double>(0.0);
+    m = _mesh.vertices().make_attribute<vec2d>(vec2d::Zero());
+    v = _mesh.vertices().make_attribute<double>(0.0);
 }
 
-pm::vertex_attribute<at::Tensor> vector_adam_updates(TargetMeshData const& _tmd, PathNetworkData const& _pnd, pm::vertex_attribute<at::Tensor> const& _gradients, OptimizerData& _od)
+pm::vertex_attribute<vec2d> vector_adam_updates(TargetMeshData const& _tmd, PathNetworkData const& _pnd, pm::vertex_attribute<vec2d> const& _gradients, OptimizerData& _od)
 {
     _od.time_step = _od.time_step + 1;
 
-    pm::vertex_attribute<at::Tensor> dirs(_gradients.mesh());
+    pm::vertex_attribute<vec2d> dirs(_gradients.mesh());
     for (auto pn_vh : _pnd.mesh_->vertices())
     {
-        dirs[pn_vh] = torch::tensor({0.0, 0.0}, torch::dtype(torch::kFloat64));
+        dirs[pn_vh] = vec2d::Zero();
         if (_pnd.map_to_layout_vertices_[pn_vh].is_invalid())
             continue;
 
-        auto const sp_from = _pnd.sp_on_target_.value()[pn_vh].copy();
-        auto pos_from = sp_from.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get());
+        // world-space step length of the gradient (mapped sps are FacePoints,
+        // so the (a, b) bary slots are exactly the gradient components)
+        auto const& sp = _pnd.sp_on_target_.value()[pn_vh];
+        auto const [A, B, C] = face_corners(sp, _tmd);
+        vec3d const bary = sp.bary_full();
+        vec2d const& g = _gradients[pn_vh];
 
-        auto sp_to = _pnd.sp_on_target_.value()[pn_vh].copy();
-        sp_to.bary_coords = sp_to.bary_coords + _gradients[pn_vh];
-        auto pos_to = sp_to.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get());
+        vec3d const pos_from = bary[0] * A + bary[1] * B + bary[2] * C;
+        double const a_to = bary[0] + g.x();
+        double const b_to = bary[1] + g.y();
+        vec3d const pos_to = a_to * A + b_to * B + (1.0 - a_to - b_to) * C;
 
         // following https://arxiv.org/pdf/2205.13599 Algorithm 1
-        _od.m[pn_vh] = _od.beta1 * _od.m[pn_vh] + (1. - _od.beta1) * _gradients[pn_vh];
-        _od.v[pn_vh] = _od.beta2 * _od.v[pn_vh] + (1. - _od.beta2) * torch::norm(pos_to - pos_from).square();
+        _od.m[pn_vh] = _od.beta1 * _od.m[pn_vh] + (1. - _od.beta1) * g;
+        double const step_norm = (pos_to - pos_from).norm();
+        _od.v[pn_vh] = _od.beta2 * _od.v[pn_vh] + (1. - _od.beta2) * (step_norm * step_norm);
 
-        auto m_avg = _od.m[pn_vh] / (1.0 - tg::pow(_od.beta1, _od.time_step));
-        auto v_avg = _od.v[pn_vh] / (1.0 - tg::pow(_od.beta2, _od.time_step));
+        vec2d const m_avg = _od.m[pn_vh] / (1.0 - tg::pow(_od.beta1, _od.time_step));
+        double const v_avg = _od.v[pn_vh] / (1.0 - tg::pow(_od.beta2, _od.time_step));
 
-        dirs[pn_vh] = -_od.step_size * m_avg / (torch::sqrt(v_avg) + _od.epsilon);
+        dirs[pn_vh] = -_od.step_size * m_avg / (std::sqrt(v_avg) + _od.epsilon);
     }
     return dirs;
 }
 
-void preprocess_gradients(TargetMeshData const& _tmd, PathNetworkData const& _pnd, pm::vertex_attribute<at::Tensor>& _gradients)
+void preprocess_gradients(TargetMeshData const& _tmd, PathNetworkData const& _pnd, pm::vertex_attribute<vec2d>& _gradients)
 {
     std::vector<VH> pn_vhs;
     pn_vhs.reserve(_pnd.mesh_->vertices().size());
@@ -80,14 +105,17 @@ void preprocess_gradients(TargetMeshData const& _tmd, PathNetworkData const& _pn
         if (_pnd.map_to_layout_vertices_[pn_vh].is_invalid())
             continue;
 
-        auto sp = _pnd.sp_on_target_.value()[pn_vh].copy();
+        auto const& sp = _pnd.sp_on_target_.value()[pn_vh];
+        auto const [A, B, C] = face_corners(sp, _tmd);
+        vec3d const bary = sp.bary_full();
+        vec2d const& g = _gradients[pn_vh];
 
-        auto pos_from = sp.get_pos(_tmd.torch_pos_, *_tmd.mesh_);
-        sp.bary_coords = sp.bary_coords + _gradients[pn_vh];
-        auto pos_to = sp.get_pos(_tmd.torch_pos_, *_tmd.mesh_);
+        vec3d const pos_from = bary[0] * A + bary[1] * B + bary[2] * C;
+        double const a_to = bary[0] + g.x();
+        double const b_to = bary[1] + g.y();
+        vec3d const pos_to = a_to * A + b_to * B + (1.0 - a_to - b_to) * C;
 
-        auto diff = pos_to - pos_from;
-        double mag = torch::norm(diff).item<double>();
+        double const mag = (pos_to - pos_from).norm();
 
         pn_vhs.push_back(pn_vh);
         magnitudes.push_back(mag);

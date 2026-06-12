@@ -16,6 +16,6 @@ namespace LayoutOpt
  */
 pm::vertex_attribute<std::vector<SurfacePoint>> do_step(TargetMeshData const& _tmd,
                                                         PathNetworkData& _pnd,
-                                                        pm::vertex_attribute<torch::Tensor> const& _dirs,
+                                                        pm::vertex_attribute<vec2d> const& _dirs,
                                                         OptimizerData* _od = nullptr);
 } // namespace LayoutOpt

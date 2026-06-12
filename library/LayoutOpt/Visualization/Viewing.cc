@@ -199,16 +199,16 @@ void view_frame_field(pm::vertex_attribute<pos3> const& _pos)
             auto df = dfd[f];
             auto confidence = df.confidence;
 
-            auto basis = df.basis;
-            auto dir = df.dir;
+            auto const& basis = df.basis_eigen;
+            auto const& dir = df.dir_eigen;
 
-            auto dir_complex = std::complex<double>(dir[0].item<double>(), dir[1].item<double>());
+            auto dir_complex = std::complex<double>(dir.x(), dir.y());
 
             auto vec = std::pow(dir_complex, 1. / 4);
             auto vec90 = std::complex<double>{0, 1} * std::pow(dir_complex, 1. / 4);
 
-            auto basisX = vec3(basis[0][0].item<double>(), basis[0][1].item<double>(), basis[0][2].item<double>());
-            auto basisY = vec3(basis[1][0].item<double>(), basis[1][1].item<double>(), basis[1][2].item<double>());
+            auto basisX = vec3(basis(0, 0), basis(0, 1), basis(0, 2));
+            auto basisY = vec3(basis(1, 0), basis(1, 1), basis(1, 2));
 
             auto tg_vec = vec2(vec.real(), vec.imag());
             auto tg_vec90 = vec2(vec90.real(), vec90.imag());

@@ -2,6 +2,8 @@
 
 #include <cassert>
 
+#include <omp.h>
+
 #include <polymesh/Mesh.hh>
 #include <polymesh/properties.hh>
 
@@ -55,24 +57,46 @@ double hand_loss_forward(LeafCtx const& _leaf,
             _ctx.pn_of_oheh[(size_t)o_heh.idx.value] = pn_heh.idx.value;
         }
 
-        // S6 + S7 per patch
+        // S6 + S7 per patch. Patches are independent (each reads shared const
+        // data and writes only its own slot), so the loop runs under OpenMP;
+        // the loss reduction (distortion_loss_forward) stays sequential in
+        // patch-index order, so the result is bitwise-deterministic for any
+        // thread count/schedule (e2e_determinism gates this).
         int const n_patches = (int)_ld.mesh_->faces().size();
-        _ctx.hctx.reserve(n_patches);
-        _ctx.sctx.reserve(n_patches);
+        _ctx.hctx.resize(n_patches);
+        _ctx.sctx.resize(n_patches);
         _ctx.bnd_uvs.resize(n_patches);
         _ctx.bnd_src.resize(n_patches);
+        _ctx.patch_fhs.resize(n_patches);
+
+        // polymesh attribute registration is NOT thread-safe, so the scratch
+        // maps are created (and later destroyed) sequentially, one per thread;
+        // each iteration resets exactly the entries prepare_param wrote (the
+        // inner/boundary lists), restoring the {-1, true} fresh state.
+        int const n_threads = omp_get_max_threads();
+        std::vector<pm::vertex_attribute<MappingIndex>> maps;
+        maps.reserve((size_t)n_threads);
+        for (int t = 0; t < n_threads; ++t)
+            maps.push_back(_omd.mesh_->vertices().make_attribute<MappingIndex>({-1, true}));
+
+#pragma omp parallel for schedule(dynamic)
         for (int patch_i = 0; patch_i < n_patches; ++patch_i)
         {
+            pm::vertex_attribute<MappingIndex>& map = maps[(size_t)omp_get_thread_num()];
             std::vector<VH> inner_vhs, bnd_vhs;
             std::vector<vec2d>& bnd = _ctx.bnd_uvs[patch_i];
             std::vector<int>& src = _ctx.bnd_src[patch_i];
-            std::vector<FH> fhs;
-            pm::vertex_attribute<MappingIndex> map = _omd.mesh_->vertices().make_attribute<MappingIndex>({-1, true});
+            std::vector<FH>& fhs = _ctx.patch_fhs[patch_i];
             prepare_param(patch_i, _pnd, _omd, o_uvs, map, inner_vhs, bnd_vhs, bnd, fhs, &src);
 
             PatchHarmonicCtx h = harmonic_param_forward(map, inner_vhs, bnd, _ctx.cotans);
-            _ctx.sctx.push_back(patch_distortion_forward(fhs, map, h.inner_uvs, bnd, _ctx.pos, _opts.harmonic_options));
-            _ctx.hctx.push_back(std::move(h));
+            _ctx.sctx[patch_i] = patch_distortion_forward(fhs, map, h.inner_uvs, bnd, _ctx.pos, _opts.harmonic_options);
+            _ctx.hctx[patch_i] = std::move(h);
+
+            for (auto vh : inner_vhs)
+                map[vh] = {-1, true};
+            for (auto vh : bnd_vhs)
+                map[vh] = {-1, true};
         }
         _ctx.harmonic = distortion_loss_forward(_ctx.sctx, /*normalized*/ false);
     }

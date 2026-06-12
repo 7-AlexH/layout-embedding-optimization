@@ -1,6 +1,5 @@
 #include "IO.hh"
 #include <fstream>
-#include "LayoutOpt/TorchUtils.hh"
 #include "LayoutOpt/Utils/Debug.hh"
 #include "LayoutOpt/Visualization/ColorsMaps.hh"
 #include "polymesh/formats.hh"
@@ -37,7 +36,8 @@ void write_pathnetwork(std::filesystem::path const& _path, TargetMeshData const&
     auto pos = _pnd.mesh_->vertices().make_attribute<pos3>();
     for (auto pn_vh : _pnd.mesh_->vertices())
     {
-        pos[pn_vh] = torch_to_pos3(_pnd.sp_on_target_.value()[pn_vh].get_pos(_tmd.torch_pos_, *_tmd.mesh_.get()));
+        vec3d const p = _pnd.sp_on_target_.value()[pn_vh].get_pos(_tmd.pos_mat_, *_tmd.mesh_.get());
+        pos[pn_vh] = pos3(p.x(), p.y(), p.z());
         pm::save(path.string().c_str(), pos);
     }
 }

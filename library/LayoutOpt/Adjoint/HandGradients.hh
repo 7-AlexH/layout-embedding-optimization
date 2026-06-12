@@ -1,9 +1,7 @@
 #pragma once
-// Phase 4 / S1 of the remove-autodiff plan: the hand-rolled replacement of
-// compute_gradients (ObjectiveFunctions.cc) — the full forward loss + reverse
-// pass over the validated Phase 4 stage pairs, torch-free except for the
-// constant strip-flattening reads inside leaf_collect / intersections_forward
-// (those turn plain in Phase 5/6).
+// The hand-rolled adjoint chain: the full forward loss + reverse pass over
+// the stage pairs validated in the remove-autodiff plan (Phase 4). Entirely
+// plain-double/Eigen — no autodiff library involved.
 //
 // Forward chain (mirrors eval() in Optimization.cc + harmonic_distortion_loss):
 //   leaf_forward            bary -> 3D layout-node overlay rows + 2D strip
@@ -68,6 +66,7 @@ struct HandLossCtx
     std::vector<PatchDistortionCtx> sctx;
     std::vector<std::vector<vec2d>> bnd_uvs;
     std::vector<std::vector<int>> bnd_src;
+    std::vector<std::vector<FH>> patch_fhs; // per-patch overlay faces, sctx face order (EvalInfo viz)
     CurvAlignCtx curv_ctx;
 
     // loss pieces (harmonic / curvature are unweighted)

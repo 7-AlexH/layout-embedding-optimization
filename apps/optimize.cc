@@ -1,12 +1,13 @@
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 
 #include <glow-extras/viewer/canvas.hh>
 #include <polymesh/Mesh.hh>
 #include <polymesh/formats.hh>
-#include <torch/cuda.h>
 
 #include <LayoutOpt/DataStructures/LayoutEmbedding.hh>
+#include <LayoutOpt/DataStructures/TriangleStrip.hh>
 #include <LayoutOpt/DataStructures/Types.hh>
 #include <LayoutOpt/Embedding.hh>
 #include <LayoutOpt/EmbeddingUtils.hh>
@@ -87,7 +88,8 @@ int main()
     LayoutData ld(l_pos);
     PathNetworkData pnd(ld.pos_);
     OverlayMeshData omd(tmd.pos_);
-    compute_layout_embedding_init(tmd, ld, pnd, omd, true);
+    std::vector<TriangleStrip> strips; // refreshed by every init/update below; eval() differentiates through them
+    compute_layout_embedding_init(tmd, ld, pnd, omd, true, &strips);
     
     bool view_init = true;
     if(view_init)
@@ -109,16 +111,10 @@ int main()
         return oss.str();
     };
 
-    // volatile, NOT constexpr: torch_cpu.dll clobbers the callee-saved registers
-    // xmm14/xmm15 during eval() (Win64 ABI violation). MSVC parks loop-invariant
-    // FP constants in exactly those registers, so any constant used inside the
-    // loop after the first eval() silently turns to garbage (observed: step_size
-    // became exactly 0 -> frozen optimization). volatile forces a memory reload
-    // at every use. Remove once libtorch is gone (remove-autodiff plan, Phase 6).
-    static volatile double STEP_SIZE_MAX = 0.0015;
-    static volatile double STEP_SIZE_MIN = 0.0005;
-    static volatile double STEP_GROWTH = 1.15;
-    static volatile double RESAMPLE_SPACING = 0.2;
+    double const STEP_SIZE_MAX = 0.0015;
+    double const STEP_SIZE_MIN = 0.0005;
+    double const STEP_GROWTH = 1.15;
+    double const RESAMPLE_SPACING = 0.2;
 
     OptimizerData od;
     od.init_vetor_adam_param(*pnd.mesh_.get(), STEP_SIZE_MIN);
@@ -136,12 +132,13 @@ int main()
             od.init_vetor_adam_param(*pnd.mesh_.get(), STEP_SIZE_MIN);
             DEBUG_OUT("resample")
             resample_layout(tmd, ld, pnd, omd, RESAMPLE_SPACING);
-            compute_layout_embedding_init(tmd, ld, pnd, omd, false);
+            compute_layout_embedding_init(tmd, ld, pnd, omd, false, &strips);
             ITER_UNTIL_REMESH += 15;
         }
 
         DEBUG_OUT("eval")
-        auto eval_info = eval(tmd, ld, pnd, omd, opts, i, od);
+        auto eval_info = eval(tmd, ld, pnd, omd, strips, opts, i, od);
+        std::printf("LOSS[%d] = %.17g\n", i, eval_info.loss);
 
         if (enable_screenshots)
         {
@@ -153,7 +150,7 @@ int main()
         }
 
         DEBUG_OUT("apply")
-        apply(tmd, ld, pnd, omd, od, eval_info);
+        apply(tmd, ld, pnd, omd, od, eval_info, &strips);
         od.step_size = tg::min(od.step_size * STEP_GROWTH, double(STEP_SIZE_MAX)); // warmup
     }
 
