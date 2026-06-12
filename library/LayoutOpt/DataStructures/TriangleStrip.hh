@@ -1,5 +1,8 @@
 #pragma once
-#include "LayoutOpt/DataStructures/LayoutEmbedding.hh"
+#include <optional>
+#include <vector>
+#include <polymesh/Mesh.hh>
+#include <polymesh/attributes.hh>
 #include "LayoutOpt/DataStructures/Types.hh"
 namespace LayoutOpt
 {
@@ -17,9 +20,10 @@ struct TriangleStrip
     EH l_eh;
     std::vector<VH> pn_vhs;
 
-    pm::halfedge_attribute<torch::Tensor> heh_pos_2d; // position is always associated with vertex_from
+    // position is always associated with vertex_from; nullopt = not set
+    pm::halfedge_attribute<std::optional<vec2d>> heh_pos_2d;
 
-    void set_vertex_pos(VH _t_vh, torch::Tensor _pos)
+    void set_vertex_pos(VH _t_vh, vec2d const& _pos)
     {
         for (auto t_heh_outgoing : _t_vh.outgoing_halfedges())
         {
@@ -27,7 +31,7 @@ struct TriangleStrip
         }
     }
 
-    void set_edge_pos(HEH _t_heh, torch::Tensor _pos_from, torch::Tensor _pos_to)
+    void set_edge_pos(HEH _t_heh, vec2d const& _pos_from, vec2d const& _pos_to)
     {
         heh_pos_2d[_t_heh] = _pos_from;
         heh_pos_2d[_t_heh.next()] = _pos_to;
@@ -44,10 +48,10 @@ struct TriangleStrip
         auto pos_to = heh_pos_2d[heh_opp.next()];
 
         // only set if not set already and if the value is defined
-        if (pos_to.defined() && !heh_pos_2d[_t_heh].defined())
+        if (pos_to.has_value() && !heh_pos_2d[_t_heh].has_value())
             heh_pos_2d[_t_heh] = pos_to;
 
-        if (pos_from.defined() && !heh_pos_2d[_t_heh.next()].defined())
+        if (pos_from.has_value() && !heh_pos_2d[_t_heh.next()].has_value())
             heh_pos_2d[_t_heh.next()] = pos_from;
     }
 

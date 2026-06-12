@@ -25,6 +25,32 @@
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
+    },
+    {
+      "name": "msvc-release",
+      "description": "Release build using MSVC (cl). Requires a vcvars64 environment (see setup_msvc_env.ps1).",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../MSVC-Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
+      }
+    },
+    {
+      "name": "msvc-debug",
+      "description": "Debug build using MSVC (cl). Requires a vcvars64 environment (see setup_msvc_env.ps1).",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../MSVC-Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5"
+      }
     }
   ],
   "buildPresets": [
@@ -39,6 +65,16 @@
       "configurePreset": "clang-release",
       "description": "Build Release preset",
       "jobs": 4
+    },
+    {
+      "name": "msvc-release",
+      "configurePreset": "msvc-release",
+      "description": "Build MSVC Release preset"
+    },
+    {
+      "name": "msvc-debug",
+      "configurePreset": "msvc-debug",
+      "description": "Build MSVC Debug preset"
     }
   ]
 }

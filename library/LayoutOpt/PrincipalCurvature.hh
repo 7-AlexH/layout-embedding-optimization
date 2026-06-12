@@ -2,8 +2,6 @@
 #include <LayoutOpt/DataStructures/Types.hh>
 #include <polymesh/attributes.hh>
 
-#include "LayoutOpt/TorchUtils.hh"
-
 namespace LayoutOpt
 {
 struct PrincipalCurvature
@@ -31,8 +29,10 @@ pm::vertex_attribute<PrincipalCurvature> principal_curvature(pm::vertex_attribut
 struct DirectionFieldData
 {
     double confidence; // magnitude is proportional to the squared difference of the 1st and 2nd principal curvatures (κ1−κ2)2
-    torch::Tensor basis; //tensor shape [2, 3], ie two 3D vectors
-    torch::Tensor dir; //smooth direction field --> a 2D vector raised to the 4th power (4-rosy field), norm = 1
+
+    // The field is constant w.r.t. the optimization, so these carry no gradient.
+    Eigen::Matrix<double, 2, 3> basis_eigen; // two 3D tangent-basis vectors (rows)
+    vec2d dir_eigen; // smooth direction field --> a 2D vector raised to the 4th power (4-rosy field), norm = 1
 };
 
 

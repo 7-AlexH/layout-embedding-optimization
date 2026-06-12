@@ -1,6 +1,5 @@
 #include "IO.hh"
 #include <fstream>
-#include "LayoutOpt/TorchUtils.hh"
 #include "LayoutOpt/Utils/Debug.hh"
 #include "LayoutOpt/Visualization/ColorsMaps.hh"
 #include "polymesh/formats.hh"
@@ -24,10 +23,10 @@ void write_state(std::filesystem::path const& _path, TargetMeshData const& _tmd,
     DEBUG_OUT("===================write_state=====================");
     namespace fs = std::filesystem;
     auto t_path = _path / "state_t.obj";
-    pm::save(t_path.c_str(), _tmd.pos_);
+    pm::save(t_path.string().c_str(), _tmd.pos_);
 
     auto l_path = _path / "state_l.obj";
-    pm::save(l_path.c_str(), _ld.pos_);
+    pm::save(l_path.string().c_str(), _ld.pos_);
 }
 
 void write_pathnetwork(std::filesystem::path const& _path, TargetMeshData const& _tmd, PathNetworkData const& _pnd)
@@ -37,8 +36,9 @@ void write_pathnetwork(std::filesystem::path const& _path, TargetMeshData const&
     auto pos = _pnd.mesh_->vertices().make_attribute<pos3>();
     for (auto pn_vh : _pnd.mesh_->vertices())
     {
-        pos[pn_vh] = torch_to_pos3(_pnd.sp_on_target_.value()[pn_vh].get_pos(_tmd.torch_pos_, *_tmd.mesh_.get()));
-        pm::save(path.c_str(), pos);
+        vec3d const p = _pnd.sp_on_target_.value()[pn_vh].get_pos(_tmd.pos_mat_, *_tmd.mesh_.get());
+        pos[pn_vh] = pos3(p.x(), p.y(), p.z());
+        pm::save(path.string().c_str(), pos);
     }
 }
 
@@ -76,7 +76,7 @@ void write_overlay_and_mask(std::filesystem::path const& _path, OverlayMeshData 
     // 3. write mesh
     namespace fs = std::filesystem;
     auto t_path = _path / "state_o.obj";
-    pm::save(t_path.c_str(), _omd.pos_);
+    pm::save(t_path.string().c_str(), _omd.pos_);
 }
 
 void write_target_labels_per_vertex(std::filesystem::path const& _path, TargetMeshData const& _tmd, OverlayMeshData const& _omd)
@@ -105,7 +105,7 @@ void write_target_labels_per_vertex(std::filesystem::path const& _path, TargetMe
     // 3. write mesh
     namespace fs = std::filesystem;
     auto t_path = _path / "state_t.obj";
-    pm::save(t_path.c_str(), _tmd.pos_);
+    pm::save(t_path.string().c_str(), _tmd.pos_);
 
 
     std::ifstream ifs(_path / "t_vertex_label.txt");
@@ -147,7 +147,7 @@ void write_overlay_labels_per_face(std::filesystem::path const& _path, OverlayMe
     // 3. write mesh
     namespace fs = std::filesystem;
     auto t_path = _path / "state_o.obj";
-    pm::save(t_path.c_str(), _omd.pos_);
+    pm::save(t_path.string().c_str(), _omd.pos_);
 
 
     std::ifstream ifs(_path / "l_flabel.txt");

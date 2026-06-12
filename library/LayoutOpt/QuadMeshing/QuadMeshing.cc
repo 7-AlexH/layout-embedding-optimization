@@ -154,7 +154,7 @@ int count_subdiv(LoopSubdivData const& _lsd, pm::halfedge_handle const& arc_heh,
     else if (uv_from.y == uv_to.y)
         return abs(uv_to.x - uv_from.x) - 1;
     else
-        std::logic_error("");
+        throw std::logic_error("count_subdiv: arc is neither axis-aligned in u nor v");
 }
 
 

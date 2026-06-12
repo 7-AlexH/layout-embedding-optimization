@@ -7,7 +7,7 @@
 #include <polymesh/Mesh.hh>
 #include <typed-geometry/tg.hh>
 
-#include <eigen3/Eigen/Eigen>
+#include <Eigen/Eigen>
 
 #include <polymesh/std/io.hh>
 

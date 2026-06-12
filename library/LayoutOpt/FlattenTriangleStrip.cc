@@ -1,6 +1,5 @@
 #include "FlattenTriangleStrip.hh"
-#include <torch/nn/functional/normalization.h>
-#include "LayoutOpt/TorchUtils.hh"
+#include "LayoutOpt/GeomUtils.hh"
 
 #include <glow-extras/viewer/canvas.hh>
 #include "LayoutOpt/Utils.hh"
@@ -11,8 +10,17 @@
 namespace LayoutOpt
 {
 
+long g_vertex_sp_conversion_count = 0;
+
 namespace
 {
+// Strip 2D positions are plain doubles (std::optional<vec2d>); nullopt replaces
+// the original implementation's undefined-tensor sentinel. The strip flattening
+// is constant w.r.t. the optimization (see the remove-autodiff plan, "Phase 2
+// result"), so nothing here needs to be differentiable.
+
+pos3 pos3_of_2D(vec2d const& _v) { return pos3(_v.x(), _v.y(), 0.0); }
+
 // DEBUG
 auto cd_2D = gv::canvas_data();
 auto cd_3D = gv::canvas_data();
@@ -37,7 +45,7 @@ void init_canvas_current_strip_based_on_fhs(TriangleStrip const& _strip)
         std::vector<pos3> positions;
         for (auto heh : fh.halfedges())
         {
-            auto pos = pos3(torch_to_pos2(_strip.heh_pos_2d[heh]));
+            auto pos = pos3_of_2D(_strip.heh_pos_2d[heh].value());
             positions.push_back(pos);
         }
         auto color = cg.generate_next_color();
@@ -54,12 +62,12 @@ void init_canvas_current_2D_pos(TriangleStrip const& _strip)
         bool can_view = true;
         for (auto heh : fh.halfedges())
         {
-            if (!_strip.heh_pos_2d[heh].defined())
+            if (!_strip.heh_pos_2d[heh].has_value())
             {
                 can_view = false;
                 break;
             }
-            auto pos = pos3(torch_to_pos2(_strip.heh_pos_2d[heh]));
+            auto pos = pos3_of_2D(_strip.heh_pos_2d[heh].value());
             positions.push_back(pos);
         }
 
@@ -74,9 +82,9 @@ void init_canvas_current_2D_pos(TriangleStrip const& _strip)
     {
         bool can_view = true;
         std::vector<pos3> positions;
-        if (_strip.heh_pos_2d[eh.halfedgeA()].defined() && _strip.heh_pos_2d[eh.halfedgeB().next()].defined())
+        if (_strip.heh_pos_2d[eh.halfedgeA()].has_value() && _strip.heh_pos_2d[eh.halfedgeB().next()].has_value())
         {
-            auto pos = pos3(torch_to_pos2(_strip.heh_pos_2d[eh.halfedgeA()]));
+            auto pos = pos3_of_2D(_strip.heh_pos_2d[eh.halfedgeA()].value());
             positions.push_back(pos);
             cd_2D.add_point(pos, BLUE).size(7);
         }
@@ -84,9 +92,9 @@ void init_canvas_current_2D_pos(TriangleStrip const& _strip)
         {
             can_view = false;
         }
-        if (_strip.heh_pos_2d[eh.halfedgeB()].defined() && _strip.heh_pos_2d[eh.halfedgeA().next()].defined())
+        if (_strip.heh_pos_2d[eh.halfedgeB()].has_value() && _strip.heh_pos_2d[eh.halfedgeA().next()].has_value())
         {
-            auto pos = pos3(torch_to_pos2(_strip.heh_pos_2d[eh.halfedgeB()]));
+            auto pos = pos3_of_2D(_strip.heh_pos_2d[eh.halfedgeB()].value());
             positions.push_back(pos);
             cd_2D.add_point(pos, BLUE).size(7);
         }
@@ -120,10 +128,10 @@ double compute_strip_segment_length(TriangleStrip const& _strip, size_t _idx_A, 
     auto const& sp_A = _pnd.sp_on_target_.value()[pn_A];
     auto const& sp_B = _pnd.sp_on_target_.value()[pn_B];
 
-    auto pos_A = sp_A.get_pos(_tmd.torch_pos_, *_tmd.mesh_);
-    auto pos_B = sp_B.get_pos(_tmd.torch_pos_, *_tmd.mesh_);
+    vec3d const pos_A = sp_A.get_pos(_tmd.pos_mat_, *_tmd.mesh_);
+    vec3d const pos_B = sp_B.get_pos(_tmd.pos_mat_, *_tmd.mesh_);
 
-    return torch::norm(pos_B - pos_A).item<double>();
+    return (pos_B - pos_A).norm();
 }
 
 void set_triangle_pos(TriangleStrip& _strip,
@@ -132,17 +140,17 @@ void set_triangle_pos(TriangleStrip& _strip,
                       bool positive,
                       TargetMeshData const& _tmd,
                       PathNetworkData const& _pnd,
-                      torch::Tensor _displacement = torch::tensor({0.0, 0.0}, torch::dtype(torch::kFloat64)))
+                      vec2d _displacement = vec2d::Zero())
 {
     auto pn_O = _strip.pn_vhs[_idx_O];
     auto pn_X = _strip.pn_vhs[_idx_X];
 
     auto t_heh_O = _tmd.mesh_->handle_of(_pnd.sp_on_target_.value()[pn_O].heh_idx);
 
-    auto pos_O = _pnd.sp_on_target_.value()[pn_O].get_pos(_tmd.torch_pos_, *_tmd.mesh_);
-    auto pos_X = _pnd.sp_on_target_.value()[pn_X].get_pos(_tmd.torch_pos_, *_tmd.mesh_);
+    vec3d const pos_O = _pnd.sp_on_target_.value()[pn_O].get_pos(_tmd.pos_mat_, *_tmd.mesh_);
+    vec3d const pos_X = _pnd.sp_on_target_.value()[pn_X].get_pos(_tmd.pos_mat_, *_tmd.mesh_);
 
-    auto face_2D_coords = torch_compute_2D_face_embedding(t_heh_O, pos_O, pos_X, positive, _tmd.torch_pos_);
+    auto face_2D_coords = compute_2D_face_embedding(t_heh_O, pos_O, pos_X, positive, _tmd.pos_mat_);
 
     auto t_heh_iter = t_heh_O;
 
@@ -150,11 +158,11 @@ void set_triangle_pos(TriangleStrip& _strip,
     auto const& sp_X = _pnd.sp_on_target_.value()[pn_X];
     for (size_t i = 0; i < 3; ++i)
     {
-        _strip.heh_pos_2d[t_heh_iter] = face_2D_coords[i] + _displacement;
+        _strip.heh_pos_2d[t_heh_iter] = vec2d(face_2D_coords.row(i).transpose()) + _displacement;
         // special handeling for vertex point
         if (sp_X.is_vertex_sp() && t_heh_iter.vertex_from() == _tmd.mesh_->handle_of(sp_X.heh_idx).vertex_from())
         {
-            _strip.set_vertex_pos(t_heh_iter.vertex_from(), _strip.heh_pos_2d[t_heh_iter]);
+            _strip.set_vertex_pos(t_heh_iter.vertex_from(), _strip.heh_pos_2d[t_heh_iter].value());
             // {
             //     DEBUG_OUT("here")
             //     auto c = gv::canvas();
@@ -176,44 +184,43 @@ void puzzle_sp_prev_vertex(SurfacePoint const& _sp_prev, SurfacePoint const& _sp
         t_hh_iter = t_hh.opposite_face().halfedges().filter([t_vh](auto heh) { return heh.vertex_from() == t_vh; }).first();
     assert(t_hh_iter.is_valid() && t_hh_iter.vertex_from() == t_vh);
 
-    auto const& A = _tmd.torch_pos_[t_hh_iter.vertex_from().idx.value];
-    auto const& A_2D = _strip.heh_pos_2d[t_hh_iter];
-    assert(A_2D.defined());
+    vec3d const A = _tmd.pos_mat_.row(t_hh_iter.vertex_from().idx.value).transpose();
+    assert(_strip.heh_pos_2d[t_hh_iter].has_value());
+    vec2d const A_2D = _strip.heh_pos_2d[t_hh_iter].value();
 
-    auto const& B = _tmd.torch_pos_[t_hh_iter.vertex_to().idx.value];
-    auto const& C = _tmd.torch_pos_[t_hh_iter.next().vertex_to().idx.value];
+    vec3d const B = _tmd.pos_mat_.row(t_hh_iter.vertex_to().idx.value).transpose();
+    vec3d const C = _tmd.pos_mat_.row(t_hh_iter.next().vertex_to().idx.value).transpose();
 
-    auto const& O = A;
-    auto X = _sp_curr.get_pos(_tmd.torch_pos_, *_tmd.mesh_);
+    vec3d const& O = A;
+    vec3d const X = _sp_curr.get_pos(_tmd.pos_mat_, *_tmd.mesh_);
 
-    auto AB = B - A;
-    auto AC = C - A;
+    vec3d const AB = B - A;
+    vec3d const AC = C - A;
 
-    auto cross_AB_AC = torch::linalg_cross(AB, AC);
-    auto normal = torch::nn::functional::normalize(cross_AB_AC, torch::nn::functional::NormalizeFuncOptions().p(2).dim(0));
+    vec3d const normal = normalized_eps(AB.cross(AC));
 
-    auto OB = B - O;
-    auto OC = C - O;
-    auto OX = X - O;
+    vec3d const OB = B - O;
+    vec3d const OC = C - O;
+    vec3d const OX = X - O;
 
-    auto length_OB = torch::norm(OB);
-    auto length_OC = torch::norm(OC);
+    double const length_OB = OB.norm();
+    double const length_OC = OC.norm();
 
-    auto OB_normalized = torch::nn::functional::normalize(OB, torch::nn::functional::NormalizeFuncOptions().p(2).dim(0));
-    auto OC_normalized = torch::nn::functional::normalize(OC, torch::nn::functional::NormalizeFuncOptions().p(2).dim(0));
-    auto OX_normalized = torch::nn::functional::normalize(OX, torch::nn::functional::NormalizeFuncOptions().p(2).dim(0));
+    vec3d const OB_normalized = normalized_eps(OB);
+    vec3d const OC_normalized = normalized_eps(OC);
+    vec3d const OX_normalized = normalized_eps(OX);
 
-    auto angle_XOB = torch::atan2(torch::dot(torch::linalg_cross(OX_normalized, OB_normalized), normal), torch::dot(OB_normalized, OX_normalized));
-    auto angle_XOC = torch::atan2(torch::dot(torch::linalg_cross(OX_normalized, OC_normalized), normal), torch::dot(OC_normalized, OX_normalized));
+    double const angle_XOB = std::atan2(OX_normalized.cross(OB_normalized).dot(normal), OB_normalized.dot(OX_normalized));
+    double const angle_XOC = std::atan2(OX_normalized.cross(OC_normalized).dot(normal), OC_normalized.dot(OX_normalized));
 
-    auto OB_2D = A_2D + length_OB * torch::stack({torch::cos(angle_XOB), torch::sin(angle_XOB)});
-    auto OC_2D = A_2D + length_OC * torch::stack({torch::cos(angle_XOC), torch::sin(angle_XOC)});
+    vec2d const OB_2D = A_2D + length_OB * vec2d(std::cos(angle_XOB), std::sin(angle_XOB));
+    vec2d const OC_2D = A_2D + length_OC * vec2d(std::cos(angle_XOC), std::sin(angle_XOC));
 
     _strip.set_edge_pos(t_hh_iter.next(), OB_2D, OC_2D);
     _strip.heh_pos_2d[t_hh_iter.next().next()] = OC_2D;
 
-    cd_2D.add_point(pos3(torch_to_pos2(OB_2D)), GREEN).size(9);
-    cd_2D.add_point(pos3(torch_to_pos2(OC_2D)), GREEN).size(9);
+    cd_2D.add_point(pos3_of_2D(OB_2D), GREEN).size(9);
+    cd_2D.add_point(pos3_of_2D(OC_2D), GREEN).size(9);
 }
 
 void puzzle_face(HEH _t_hh_iter, TriangleStrip& _strip, TargetMeshData const& _tmd)
@@ -223,39 +230,37 @@ void puzzle_face(HEH _t_hh_iter, TriangleStrip& _strip, TargetMeshData const& _t
     // copy to other side if not already done
     _strip.set_edge_pos_by_copy_from_opposite(_t_hh_iter);
 
-    auto const& A = _tmd.torch_pos_[_t_hh_iter.vertex_from().idx.value];
-    auto const& A_2D = _strip.heh_pos_2d[_t_hh_iter];
+    vec3d const A = _tmd.pos_mat_.row(_t_hh_iter.vertex_from().idx.value).transpose();
+    vec2d const A_2D = _strip.heh_pos_2d[_t_hh_iter].value();
 
-    auto const& B = _tmd.torch_pos_[_t_hh_iter.vertex_to().idx.value];
-    auto const& B_2D = _strip.heh_pos_2d[_t_hh_iter.next()];
+    vec3d const B = _tmd.pos_mat_.row(_t_hh_iter.vertex_to().idx.value).transpose();
+    vec2d const B_2D = _strip.heh_pos_2d[_t_hh_iter.next()].value();
 
     HEH hehC = _t_hh_iter.next().next();
     VH vhC = hehC.vertex_from();
-    auto const& C = _tmd.torch_pos_[vhC.idx.value];
+    vec3d const C = _tmd.pos_mat_.row(vhC.idx.value).transpose();
 
-    auto AB = B - A;
-    auto AC = C - A;
+    vec3d const AB = B - A;
+    vec3d const AC = C - A;
 
-    auto normal = torch::nn::functional::normalize(torch::linalg_cross(AB, AC), torch::nn::functional::NormalizeFuncOptions().p(2).dim(0));
+    vec3d const normal = normalized_eps(AB.cross(AC));
 
-    auto AB_normalized = torch::nn::functional::normalize(AB, torch::nn::functional::NormalizeFuncOptions().p(2).dim(0));
-    auto height_vector = torch::linalg_cross(normal, AB_normalized);
-    auto height_vector_normalized = torch::nn::functional::normalize(height_vector, torch::nn::functional::NormalizeFuncOptions().p(2).dim(0));
+    vec3d const AB_normalized = normalized_eps(AB);
+    vec3d const height_vector = normal.cross(AB_normalized);
+    vec3d const height_vector_normalized = normalized_eps(height_vector);
 
-    auto BC = C - B;
-    auto height = torch::dot(BC, height_vector_normalized);
+    vec3d const BC = C - B;
+    double const height = BC.dot(height_vector_normalized);
 
-    auto P = C - height * height_vector_normalized;
-    auto AP = P - A;
-    auto length_AP = torch::dot(AP, AB_normalized);
+    vec3d const P = C - height * height_vector_normalized;
+    vec3d const AP = P - A;
+    double const length_AP = AP.dot(AB_normalized);
 
-    auto tg_height = height.item<double>() * vec3(torch_to_pos3(height_vector_normalized));
+    vec2d const AB_2D = B_2D - A_2D;
+    vec2d const AB_2D_normalized = normalized_eps(AB_2D);
+    vec2d const height_vector_normalized_2D(-AB_2D_normalized.y(), AB_2D_normalized.x());
 
-    auto AB_2D = B_2D - A_2D;
-    auto AB_2D_normalized = torch::nn::functional::normalize(AB_2D, torch::nn::functional::NormalizeFuncOptions().p(2).dim(0));
-    auto height_vector_normalized_2D = torch::stack({-AB_2D_normalized[1], AB_2D_normalized[0]});
-
-    auto C_2D = A_2D + length_AP * AB_2D_normalized + height * height_vector_normalized_2D;
+    vec2d const C_2D = A_2D + length_AP * AB_2D_normalized + height * height_vector_normalized_2D;
 
     _strip.heh_pos_2d[hehC] = C_2D;
 }
@@ -287,25 +292,25 @@ void puzzle_triangle_fan(HEH _start_heh, HEH _end_heh, TriangleStrip& _strip, Ta
 
     // get apex of triangle fan
     auto vh_O = _start_heh.vertex_from();
-    auto O = _tmd.torch_pos_[_start_heh.vertex_from().idx.value];
-    auto O_2D = _strip.heh_pos_2d[_start_heh];
+    vec3d const O = _tmd.pos_mat_.row(_start_heh.vertex_from().idx.value).transpose();
+    vec2d const O_2D = _strip.heh_pos_2d[_start_heh].value();
 
     // total angle around apex from start to end in 3D
     double total_angle_start_end_3D = angle_sum(_start_heh, _end_heh, _tmd.pos_); // radians
 
     // total angle around apex from start to end in 2D
-    auto start_to_2D = _strip.heh_pos_2d[_start_heh.opposite()];
-    auto end_to_2D = _strip.heh_pos_2d[_end_heh.next()];
+    vec2d const start_to_2D = _strip.heh_pos_2d[_start_heh.opposite()].value();
+    vec2d const end_to_2D = _strip.heh_pos_2d[_end_heh.next()].value();
 
-    auto lenght_O_start_to = (start_to_2D - O_2D).norm();
-    auto length_O_end_to = (end_to_2D - O_2D).norm();
-    auto length_start_to_end_to = (start_to_2D - end_to_2D).norm();
+    double const lenght_O_start_to = (start_to_2D - O_2D).norm();
+    double const length_O_end_to = (end_to_2D - O_2D).norm();
+    double const length_start_to_end_to = (start_to_2D - end_to_2D).norm();
 
     // Law of cosines
-    auto total_angle_start_end_2D_cos = (lenght_O_start_to * lenght_O_start_to + length_O_end_to * length_O_end_to - length_start_to_end_to * length_start_to_end_to)
-                                        / (2.0 * lenght_O_start_to * length_O_end_to);
-    total_angle_start_end_2D_cos = torch::clamp(total_angle_start_end_2D_cos, -1.0, 1.0);
-    double total_angle_start_end_2D = torch::acos(total_angle_start_end_2D_cos).item<double>();
+    double total_angle_start_end_2D_cos = (lenght_O_start_to * lenght_O_start_to + length_O_end_to * length_O_end_to - length_start_to_end_to * length_start_to_end_to)
+                                          / (2.0 * lenght_O_start_to * length_O_end_to);
+    total_angle_start_end_2D_cos = std::clamp(total_angle_start_end_2D_cos, -1.0, 1.0);
+    double total_angle_start_end_2D = std::acos(total_angle_start_end_2D_cos);
 
     // DEBUG_OUT("===================================================")
     // DEBUG_VAR(total_angle_start_end_3D / M_PI * 180.0)
@@ -320,19 +325,19 @@ void puzzle_triangle_fan(HEH _start_heh, HEH _end_heh, TriangleStrip& _strip, Ta
         auto vhA = hehAB.vertex_from();
         auto vhB = hehAB.vertex_to();
 
-        auto A = _tmd.torch_pos_[vhA.idx.value]; // 3D pos of A
-        auto B = _tmd.torch_pos_[vhB.idx.value]; // 3D pos of B
+        vec3d const A = _tmd.pos_mat_.row(vhA.idx.value).transpose(); // 3D pos of A
+        vec3d const B = _tmd.pos_mat_.row(vhB.idx.value).transpose(); // 3D pos of B
 
         // Vector lengths
-        auto length_OA = (A - O).norm();
-        auto length_OB = (B - O).norm();
-        auto length_AB = (A - B).norm();
+        double const length_OA = (A - O).norm();
+        double const length_OB = (B - O).norm();
+        double const length_AB = (A - B).norm();
 
         // angles
         // Law of cosines for angle at O
-        auto cosAOB = (length_OA * length_OA + length_OB * length_OB - length_AB * length_AB) / (2.0 * length_OA * length_OB);
-        cosAOB = torch::clamp(cosAOB, -1.0, 1.0);
-        double AOB = torch::acos(cosAOB).item<double>();
+        double cosAOB = (length_OA * length_OA + length_OB * length_OB - length_AB * length_AB) / (2.0 * length_OA * length_OB);
+        cosAOB = std::clamp(cosAOB, -1.0, 1.0);
+        double AOB = std::acos(cosAOB);
 
         // DEBUG_VAR(AOB / M_PI * 180.0);
 
@@ -340,28 +345,28 @@ void puzzle_triangle_fan(HEH _start_heh, HEH _end_heh, TriangleStrip& _strip, Ta
         auto AOB_2D = total_angle_start_end_2D * (AOB / total_angle_start_end_3D); // frac of available angle
 
         // 2D pos
-        auto A_2D = _strip.heh_pos_2d[hehAB];
-        auto OA_2D = A_2D - O_2D;
-        auto OA_2D_norm = OA_2D / OA_2D.norm();
+        vec2d const A_2D = _strip.heh_pos_2d[hehAB].value();
+        vec2d const OA_2D = A_2D - O_2D;
+        vec2d const OA_2D_norm = OA_2D / OA_2D.norm();
 
         // Rotation matrix components
         auto cos_theta = std::cos(AOB_2D);
         auto sin_theta = std::sin(AOB_2D);
 
         // Assuming CCW rotation, the rotated vector is:
-        auto OB_2D = torch::tensor({cos_theta * OA_2D_norm[0].item<double>() - sin_theta * OA_2D_norm[1].item<double>(),
-                                    sin_theta * OA_2D_norm[0].item<double>() + cos_theta * OA_2D_norm[1].item<double>()});
+        vec2d OB_2D(cos_theta * OA_2D_norm.x() - sin_theta * OA_2D_norm.y(), //
+                    sin_theta * OA_2D_norm.x() + cos_theta * OA_2D_norm.y());
         // Scale by OB length to preserve edge length
         OB_2D = OB_2D * length_OB;
 
         // Translate relative to O_2D
-        auto B_2D = O_2D + OB_2D;
+        vec2d const B_2D = O_2D + OB_2D;
 
         // Store
         _strip.heh_pos_2d[hehAB.next()] = B_2D;
         _strip.set_edge_pos_by_copy_from_opposite(hehOB);
 
-        cd_2D.add_face(pos3(torch_to_pos2(A_2D)), pos3(torch_to_pos2(B_2D)), pos3(torch_to_pos2(O_2D)), PETROL_25);
+        cd_2D.add_face(pos3_of_2D(A_2D), pos3_of_2D(B_2D), pos3_of_2D(O_2D), PETROL_25);
         iter_heh = hehOB;
     }
 }
@@ -377,7 +382,7 @@ void adapt_metric(size_t _idx_current, HEH _t_hh, std::vector<VH> const& _old_pn
     // 3. slightly adapt metric
     if (_idx_current == 1 || _idx_current == _old_pn_vhs.size() - 2) // by rotation
     {
-        torch::Tensor rotation_center = torch::zeros({2}, torch::kFloat64);
+        vec2d rotation_center = vec2d::Zero();
         FH f_to_rotate;
         double theta = 0.2 * M_PI / 180.0; // 0.1 degrees in radians
 
@@ -389,18 +394,19 @@ void adapt_metric(size_t _idx_current, HEH _t_hh, std::vector<VH> const& _old_pn
         {
             theta = -theta;
             f_to_rotate = sp_next.fh(*_tmd.mesh_.get());
-            rotation_center = rotation_center + _strip.embedded_length * torch::tensor({1.0, 0.0}, torch::dtype(torch::kFloat64));
+            rotation_center = rotation_center + _strip.embedded_length * vec2d(1.0, 0.0);
         }
 
         // --- Rotation matrix ---
         auto c = std::cos(theta);
         auto s = std::sin(theta);
-        torch::Tensor R = torch::tensor({{c, -s}, {s, c}}, torch::kFloat64);
+        mat2d R;
+        R << c, -s, s, c;
 
         for (auto t_heh : f_to_rotate.halfedges())
         {
-            auto p = _strip.heh_pos_2d[t_heh] - rotation_center;
-            auto rotated = torch::matmul(R, p) + rotation_center;
+            vec2d const p = _strip.heh_pos_2d[t_heh].value() - rotation_center;
+            vec2d const rotated = R * p + rotation_center;
             _strip.heh_pos_2d[t_heh] = rotated;
 
             if (t_heh.vertex_from() == _t_hh.vertex_from())
@@ -412,15 +418,19 @@ void adapt_metric(size_t _idx_current, HEH _t_hh, std::vector<VH> const& _old_pn
     }
     else // by translation
     {
-        auto displacement = LARGE_EPS * torch::tensor({0.0, 1.0}, torch::dtype(torch::kFloat64));
+        // NOTE: the torch version's += was an in-place tensor add; hehs that shared one
+        // tensor handle (set_vertex_pos aliases) were shifted once per alias. Value
+        // semantics shifts every heh exactly once, which is the intended perturbation.
+        vec2d const displacement = LARGE_EPS * vec2d(0.0, 1.0);
         for (auto t_heh_outgoing : _t_hh.vertex_from().outgoing_halfedges())
         {
-            _strip.heh_pos_2d[t_heh_outgoing] += displacement;
+            _strip.heh_pos_2d[t_heh_outgoing] = _strip.heh_pos_2d[t_heh_outgoing].value() + displacement;
         }
     }
 };
 
-void transform_single_v_sp(size_t idx_current, std::vector<VH> const& _old_pn_vhs, TriangleStrip& strip, PathNetworkData& pnd, TargetMeshData const& tmd, torch::Tensor const& layout_seg)
+void transform_single_v_sp(
+    size_t idx_current, std::vector<VH> const& _old_pn_vhs, TriangleStrip& strip, PathNetworkData& pnd, TargetMeshData const& tmd, vec2d const& layout_A, vec2d const& layout_B)
 {
     init_canvas();
 
@@ -449,19 +459,16 @@ void transform_single_v_sp(size_t idx_current, std::vector<VH> const& _old_pn_vh
     HEH t_end_hh = t_face_cn.halfedges().filter([&](HEH t_heh) { return t_heh.vertex_from() == t_vh_curr; }).first();
     assert(t_end_hh.is_valid());
 
-    auto pos_debug = strip.heh_pos_2d[t_start_hh];
-    auto pos_debug1 = strip.heh_pos_2d[t_start_hh.next()];
+    cd_2D.add_line(pos3_of_2D(strip.heh_pos_2d[t_start_hh].value()), pos3_of_2D(strip.heh_pos_2d[t_start_hh.next()].value()), GREEN).size(12);
 
-    cd_2D.add_line(pos3(torch_to_pos2(strip.heh_pos_2d[t_start_hh])), pos3(torch_to_pos2(strip.heh_pos_2d[t_start_hh.next()])), GREEN).size(12);
-
-    if (!strip.heh_pos_2d[t_end_hh].defined() || !strip.heh_pos_2d[t_end_hh.next()].defined())
+    if (!strip.heh_pos_2d[t_end_hh].has_value() || !strip.heh_pos_2d[t_end_hh.next()].has_value())
     {
         auto c = gv::canvas_data();
         init_canvas();
         init_canvas_current_2D_pos(strip);
         c.add_data(cd_2D);
     }
-    cd_2D.add_line(pos3(torch_to_pos2(strip.heh_pos_2d[t_end_hh])), pos3(torch_to_pos2(strip.heh_pos_2d[t_end_hh.next()])), RED).size(10);
+    cd_2D.add_line(pos3_of_2D(strip.heh_pos_2d[t_end_hh].value()), pos3_of_2D(strip.heh_pos_2d[t_end_hh.next()].value()), RED).size(10);
 
     // 2. puzzle triangle fan and make last vertex consistent
     auto final_pos = strip.heh_pos_2d[t_end_hh.next()];
@@ -493,24 +500,22 @@ void transform_single_v_sp(size_t idx_current, std::vector<VH> const& _old_pn_vh
         strip.set_edge_pos_by_copy_from_opposite(t_iter_heh);
         strip.set_edge_pos_by_copy_from_opposite(t_iter_heh.opposite());
 
-        auto from_2D = strip.heh_pos_2d[t_iter_heh];
-        auto to_2D = strip.heh_pos_2d[t_iter_heh.next()];
+        vec2d const from_2D = strip.heh_pos_2d[t_iter_heh].value();
+        vec2d const to_2D = strip.heh_pos_2d[t_iter_heh.next()].value();
 
-        cd_2D.add_line(pos3(torch_to_pos2(from_2D)), pos3(torch_to_pos2(to_2D)), MAGENTA).size(5);
+        cd_2D.add_line(pos3_of_2D(from_2D), pos3_of_2D(to_2D), MAGENTA).size(5);
 
-        auto intersect_seg = torch::stack({to_2D, from_2D});
-        auto params = torch_compute_intersection_parameter(intersect_seg, layout_seg);
+        auto params = compute_intersection_parameter(to_2D, from_2D, layout_A, layout_B);
 
         auto vh_new = pn_heh.vertex_to();
         strip.pn_vhs.push_back(vh_new);
 
         pnd.sp_on_target_.value()[vh_new]
-            = SurfacePoint(torch::tensor({params[1].item<double>()}, torch::dtype(torch::kFloat64)), t_iter_heh.idx, SurfacePointType::EdgePoint);
+            = SurfacePoint(vec2d(params.value().y(), 0.0), t_iter_heh.idx, SurfacePointType::EdgePoint);
 
         // DEBUG
         auto pos = pnd.sp_on_target_.value()[vh_new].get_pos(strip.heh_pos_2d);
-        cd_2D.add_point(pos3(torch_to_pos2(pos)), MAGENTA).size(20);
-        // DEBUG_VAR(pos3(torch_to_pos2(pos)));
+        cd_2D.add_point(pos3_of_2D(pos), MAGENTA).size(20);
         //  END
 
         t_iter_heh = t_iter_heh.next().next().opposite();
@@ -525,8 +530,13 @@ void transform_single_v_sp(size_t idx_current, std::vector<VH> const& _old_pn_vh
 }
 
 // return the last index that was processed
-int transform_multiple_v_sp(
-    size_t const idx_current, std::vector<VH> const& _old_pn_vhs, TriangleStrip& strip, PathNetworkData& pnd, TargetMeshData const& tmd, torch::Tensor const& layout_seg)
+int transform_multiple_v_sp(size_t const idx_current,
+                            std::vector<VH> const& _old_pn_vhs,
+                            TriangleStrip& strip,
+                            PathNetworkData& pnd,
+                            TargetMeshData const& tmd,
+                            vec2d const& layout_A,
+                            vec2d const& layout_B)
 {
     auto const& pn_vh_prev = strip.pn_vhs.back();
     auto const& pn_vh_curr = _old_pn_vhs[idx_current];
@@ -604,8 +614,8 @@ int transform_multiple_v_sp(
 
     // 3. compute available length:
     strip.heh_pos_2d[hehs_strip.front().next()] = strip.heh_pos_2d[hehs_strip.front().opposite()];
-    auto pos_from = strip.heh_pos_2d[hehs_strip.front().next()];
-    auto pos_to = strip.heh_pos_2d[hehs_strip.back().next()];
+    vec2d const pos_from = strip.heh_pos_2d[hehs_strip.front().next()].value();
+    vec2d const pos_to = strip.heh_pos_2d[hehs_strip.back().next()].value();
 
     // 4. distribute along available length and adapt metric
     double accumulated_length = 0;
@@ -623,7 +633,7 @@ int transform_multiple_v_sp(
             auto length = tg::length(tmd.pos_[heh_prev.vertex_to()] - tmd.pos_[heh_curr.vertex_to()]);
             accumulated_length += length;
             auto t = 1.0 - (accumulated_length / total_length_3D);
-            auto pos = t * pos_from + (1.0 - t) * pos_to;
+            vec2d const pos = t * pos_from + (1.0 - t) * pos_to;
 
             strip.heh_pos_2d[heh_curr.opposite()] = pos;
             strip.heh_pos_2d[heh_curr.next()] = pos;
@@ -637,21 +647,20 @@ int transform_multiple_v_sp(
     {
         auto const t_heh = hehs_strip[i];
 
-        auto from_2D = strip.heh_pos_2d[t_heh];
-        auto to_2D = strip.heh_pos_2d[t_heh.next()];
+        vec2d const from_2D = strip.heh_pos_2d[t_heh].value();
+        vec2d const to_2D = strip.heh_pos_2d[t_heh.next()].value();
 
-        auto intersect_seg = torch::stack({to_2D, from_2D});
-        auto params = torch_compute_intersection_parameter(intersect_seg, layout_seg);
+        auto params = compute_intersection_parameter(to_2D, from_2D, layout_A, layout_B);
 
         auto vh_new = pn_heh.vertex_to();
         strip.pn_vhs.push_back(vh_new);
 
         pnd.sp_on_target_.value()[vh_new]
-            = SurfacePoint(torch::tensor({params[1].item<double>()}, torch::dtype(torch::kFloat64)), t_heh.idx, SurfacePointType::EdgePoint);
+            = SurfacePoint(vec2d(params.value().y(), 0.0), t_heh.idx, SurfacePointType::EdgePoint);
 
         // DEBUG
         auto pos = pnd.sp_on_target_.value()[vh_new].get_pos(strip.heh_pos_2d);
-        cd_2D.add_point(pos3(torch_to_pos2(pos)), MAGENTA).size(20);
+        cd_2D.add_point(pos3_of_2D(pos), MAGENTA).size(20);
         //  END
 
         if ((i + 1) < hehs_strip.size())
@@ -673,7 +682,8 @@ int transform_multiple_v_sp(
 }
 
 
-void transform_v_sp_to_e_sp(size_t idx_current, std::vector<VH> const& _old_pn_vhs, TriangleStrip& strip, PathNetworkData& pnd, TargetMeshData const& tmd, torch::Tensor const& layout_seg)
+void transform_v_sp_to_e_sp(
+    size_t idx_current, std::vector<VH> const& _old_pn_vhs, TriangleStrip& strip, PathNetworkData& pnd, TargetMeshData const& tmd, vec2d const& layout_A, vec2d const& layout_B)
 {
     auto pn_vh_prev = strip.pn_vhs.back();
     auto pn_vh_curr = _old_pn_vhs[idx_current];
@@ -703,8 +713,8 @@ void transform_v_sp_to_e_sp(size_t idx_current, std::vector<VH> const& _old_pn_v
 
     if (t_start_hh.is_invalid())
     {
-        auto pos_prev = torch_to_pos3(sp_prev.get_pos(tmd.torch_pos_, *tmd.mesh_.get()));
-        auto pos_curr = torch_to_pos3(sp_curr.get_pos(tmd.torch_pos_, *tmd.mesh_.get()));
+        auto pos_prev = eigen_to_pos3(sp_prev.get_pos(tmd.pos_mat_, *tmd.mesh_.get()));
+        auto pos_curr = eigen_to_pos3(sp_curr.get_pos(tmd.pos_mat_, *tmd.mesh_.get()));
 
         auto v = gv::view();
         auto c = gv::canvas();
@@ -714,7 +724,7 @@ void transform_v_sp_to_e_sp(size_t idx_current, std::vector<VH> const& _old_pn_v
     }
     assert(t_start_hh.is_valid());
 
-    cd_2D.add_line(pos3(torch_to_pos2(strip.heh_pos_2d[t_start_hh])), pos3(torch_to_pos2(strip.heh_pos_2d[t_start_hh.next()])), GREEN);
+    cd_2D.add_line(pos3_of_2D(strip.heh_pos_2d[t_start_hh].value()), pos3_of_2D(strip.heh_pos_2d[t_start_hh.next()].value()), GREEN);
 
 
     // 1.2 find final heh, we need to distinguish if the sp_next is edge or vertex
@@ -723,12 +733,12 @@ void transform_v_sp_to_e_sp(size_t idx_current, std::vector<VH> const& _old_pn_v
     {
         auto t_face_cn = shared_face(sp_curr, sp_next, *tmd.mesh_);
         t_end_hh = t_vh_curr.outgoing_halfedges()
-                       .filter([&](HEH t_heh) { return t_heh.face() == t_face_cn && strip.heh_pos_2d[t_heh.next()][1].item<double>() < 0; })
+                       .filter([&](HEH t_heh) { return t_heh.face() == t_face_cn && strip.heh_pos_2d[t_heh.next()].value().y() < 0; })
                        .first();
 
         auto t_hehs2 = t_face_cn.halfedges().to_vector();
-        cd_2D.add_face(pos3(torch_to_pos2(strip.heh_pos_2d[t_hehs2[0]])), pos3(torch_to_pos2(strip.heh_pos_2d[t_hehs2[1]])),
-                       pos3(torch_to_pos2(strip.heh_pos_2d[t_hehs2[2]])), GREEN_50);
+        cd_2D.add_face(pos3_of_2D(strip.heh_pos_2d[t_hehs2[0]].value()), pos3_of_2D(strip.heh_pos_2d[t_hehs2[1]].value()),
+                       pos3_of_2D(strip.heh_pos_2d[t_hehs2[2]].value()), GREEN_50);
     }
     else // sp_next is vertex_surface point
     {
@@ -737,21 +747,22 @@ void transform_v_sp_to_e_sp(size_t idx_current, std::vector<VH> const& _old_pn_v
         t_end_hh = t_hh_cn;
     }
 
-    cd_2D.add_line(pos3(torch_to_pos2(strip.heh_pos_2d[t_end_hh])), pos3(torch_to_pos2(strip.heh_pos_2d[t_end_hh.next()])), RED);
+    cd_2D.add_line(pos3_of_2D(strip.heh_pos_2d[t_end_hh].value()), pos3_of_2D(strip.heh_pos_2d[t_end_hh.next()].value()), RED);
 
     // 2. puzzle triangle fan
     puzzle_triangle_fan(t_start_hh, t_end_hh, strip, tmd);
     // make consistent
-    strip.set_vertex_pos(t_end_hh.vertex_to(), strip.heh_pos_2d[t_end_hh.next()]);
+    strip.set_vertex_pos(t_end_hh.vertex_to(), strip.heh_pos_2d[t_end_hh.next()].value());
 
     // 3. slightly adapt metric by translation
-    auto displacement = LARGE_EPS * torch::tensor({0.0, 1.0}, torch::dtype(torch::kFloat64));
+    // (value semantics; see the note in adapt_metric about the torch in-place +=)
+    vec2d const displacement = LARGE_EPS * vec2d(0.0, 1.0);
     for (auto t_heh_outgoing : t_vh_curr.outgoing_halfedges())
     {
-        strip.heh_pos_2d[t_heh_outgoing] += displacement;
+        strip.heh_pos_2d[t_heh_outgoing] = strip.heh_pos_2d[t_heh_outgoing].value() + displacement;
     }
 
-    cd_2D.add_point(pos3(torch_to_pos2(strip.heh_pos_2d[t_vh_curr_heh])), MAY_GREEN).size(15);
+    cd_2D.add_point(pos3_of_2D(strip.heh_pos_2d[t_vh_curr_heh].value()), MAY_GREEN).size(15);
 
     // 4. adapt pnd
     HEH t_iter_heh = t_start_hh;
@@ -778,24 +789,22 @@ void transform_v_sp_to_e_sp(size_t idx_current, std::vector<VH> const& _old_pn_v
         strip.set_edge_pos_by_copy_from_opposite(t_iter_heh);
         strip.set_edge_pos_by_copy_from_opposite(t_iter_heh.opposite());
 
-        auto from_2D = strip.heh_pos_2d[t_iter_heh];
-        auto to_2D = strip.heh_pos_2d[t_iter_heh.next()];
+        vec2d const from_2D = strip.heh_pos_2d[t_iter_heh].value();
+        vec2d const to_2D = strip.heh_pos_2d[t_iter_heh.next()].value();
 
-        cd_2D.add_line(pos3(torch_to_pos2(from_2D)), pos3(torch_to_pos2(to_2D)), MAGENTA).size(5);
+        cd_2D.add_line(pos3_of_2D(from_2D), pos3_of_2D(to_2D), MAGENTA).size(5);
 
-        auto intersect_seg = torch::stack({to_2D, from_2D});
-        auto params = torch_compute_intersection_parameter(intersect_seg, layout_seg);
+        auto params = compute_intersection_parameter(to_2D, from_2D, layout_A, layout_B);
 
         auto vh_new = pn_heh.vertex_to();
         strip.pn_vhs.push_back(vh_new);
 
         pnd.sp_on_target_.value()[vh_new]
-            = SurfacePoint(torch::tensor({params[1].item<double>()}, torch::dtype(torch::kFloat64)), t_iter_heh.idx, SurfacePointType::EdgePoint);
+            = SurfacePoint(vec2d(params.value().y(), 0.0), t_iter_heh.idx, SurfacePointType::EdgePoint);
 
         // DEBUG
         auto pos = pnd.sp_on_target_.value()[vh_new].get_pos(strip.heh_pos_2d);
-        cd_2D.add_point(pos3(torch_to_pos2(pos)), MAGENTA).size(20);
-        // DEBUG_VAR(pos3(torch_to_pos2(pos)));
+        cd_2D.add_point(pos3_of_2D(pos), MAGENTA).size(20);
         //  END
 
         t_iter_heh = t_iter_heh.next().next().opposite();
@@ -821,7 +830,7 @@ void transform_v_sp_to_e_sp(size_t idx_current, std::vector<VH> const& _old_pn_v
 }
 
 void transform_v_sp_to_e_sp_front_back(
-    size_t idx_current, std::vector<VH> const& _old_pn_vhs, TriangleStrip& strip, PathNetworkData& pnd, TargetMeshData const& tmd, torch::Tensor const& layout_seg)
+    size_t idx_current, std::vector<VH> const& _old_pn_vhs, TriangleStrip& strip, PathNetworkData& pnd, TargetMeshData const& tmd, vec2d const& layout_A, vec2d const& layout_B)
 {
     assert(idx_current == 1 || idx_current == _old_pn_vhs.size() - 2);
     auto pn_vh_prev = strip.pn_vhs.back();
@@ -847,7 +856,7 @@ void transform_v_sp_to_e_sp_front_back(
     strip.heh_pos_2d[t_start_hh] = strip.heh_pos_2d[t_start_hh.opposite().next()];
     strip.heh_pos_2d[t_start_hh.next()] = strip.heh_pos_2d[t_start_hh.opposite()];
 
-    cd_2D.add_line(pos3(torch_to_pos2(strip.heh_pos_2d[t_start_hh])), pos3(torch_to_pos2(strip.heh_pos_2d[t_start_hh.next()])), GREEN);
+    cd_2D.add_line(pos3_of_2D(strip.heh_pos_2d[t_start_hh].value()), pos3_of_2D(strip.heh_pos_2d[t_start_hh.next()].value()), GREEN);
 
     // 1.2 find final heh, we need to distinguish if the sp_next is edge/face or vertex
     HEH t_end_hh;
@@ -863,15 +872,15 @@ void transform_v_sp_to_e_sp_front_back(
         t_end_hh = t_hh_cn;
     }
     assert(t_end_hh.is_valid());
-    cd_2D.add_line(pos3(torch_to_pos2(strip.heh_pos_2d[t_end_hh])), pos3(torch_to_pos2(strip.heh_pos_2d[t_end_hh.next()])), RED).size(5);
+    cd_2D.add_line(pos3_of_2D(strip.heh_pos_2d[t_end_hh].value()), pos3_of_2D(strip.heh_pos_2d[t_end_hh.next()].value()), RED).size(5);
 
     // 2. puzzle triangle fan and make last vertex consistent
     auto final_pos = strip.heh_pos_2d[t_end_hh.next()];
     puzzle_triangle_fan(t_start_hh, t_end_hh, strip, tmd);
-    strip.set_vertex_pos(t_end_hh.next().vertex_from(), final_pos);
+    strip.set_vertex_pos(t_end_hh.next().vertex_from(), final_pos.value());
 
     // 3. slightly adapt metric by rotation
-    torch::Tensor rotation_center = torch::zeros({2}, torch::kFloat64);
+    vec2d rotation_center = vec2d::Zero();
     FH f_to_rotate;
     double theta = 0.5 * M_PI / 180.0; // 0.1 degrees in radians
 
@@ -883,30 +892,31 @@ void transform_v_sp_to_e_sp_front_back(
     {
         theta = -theta;
         f_to_rotate = sp_next.fh(*tmd.mesh_.get());
-        rotation_center = rotation_center + strip.embedded_length * torch::tensor({1.0, 0.0}, torch::dtype(torch::kFloat64));
+        rotation_center = rotation_center + strip.embedded_length * vec2d(1.0, 0.0);
     }
 
     // --- Rotation matrix ---
     auto c = std::cos(theta);
     auto s = std::sin(theta);
-    torch::Tensor R = torch::tensor({{c, -s}, {s, c}}, torch::kFloat64);
+    mat2d R;
+    R << c, -s, s, c;
 
     for (auto t_heh : f_to_rotate.halfedges())
     {
-        auto p = strip.heh_pos_2d[t_heh] - rotation_center;
-        auto rotated = torch::matmul(R, p) + rotation_center;
+        vec2d const p = strip.heh_pos_2d[t_heh].value() - rotation_center;
+        vec2d const rotated = R * p + rotation_center;
         strip.heh_pos_2d[t_heh] = rotated;
     }
 
     // make consistent with other triangles
     if (idx_current == 1)
     {
-        strip.set_vertex_pos(t_start_hh.vertex_from(), strip.heh_pos_2d[t_start_hh.opposite().next()]);
+        strip.set_vertex_pos(t_start_hh.vertex_from(), strip.heh_pos_2d[t_start_hh.opposite().next()].value());
         strip.heh_pos_2d[t_start_hh.next()] = strip.heh_pos_2d[t_start_hh.opposite()];
     }
     else
     {
-        strip.set_vertex_pos(t_start_hh.vertex_from(), strip.heh_pos_2d[t_end_hh]);
+        strip.set_vertex_pos(t_start_hh.vertex_from(), strip.heh_pos_2d[t_end_hh].value());
         strip.heh_pos_2d[t_end_hh.opposite()] = strip.heh_pos_2d[t_end_hh.next()];
     }
 
@@ -929,24 +939,22 @@ void transform_v_sp_to_e_sp_front_back(
 
     while (should_continue)
     {
-        auto from_2D = strip.heh_pos_2d[t_iter_heh];
-        auto to_2D = strip.heh_pos_2d[t_iter_heh.next()];
+        vec2d const from_2D = strip.heh_pos_2d[t_iter_heh].value();
+        vec2d const to_2D = strip.heh_pos_2d[t_iter_heh.next()].value();
 
-        cd_2D.add_line(pos3(torch_to_pos2(from_2D)), pos3(torch_to_pos2(to_2D)), BLUE).size(2);
+        cd_2D.add_line(pos3_of_2D(from_2D), pos3_of_2D(to_2D), BLUE).size(2);
 
-        auto intersect_seg = torch::stack({to_2D, from_2D});
-        auto params = torch_compute_intersection_parameter(intersect_seg, layout_seg);
+        auto params = compute_intersection_parameter(to_2D, from_2D, layout_A, layout_B);
 
         auto vh_new = pn_heh.vertex_to();
         strip.pn_vhs.push_back(vh_new);
 
         pnd.sp_on_target_.value()[vh_new]
-            = SurfacePoint(torch::tensor({params[1].item<double>()}, torch::dtype(torch::kFloat64)), t_iter_heh.idx, SurfacePointType::EdgePoint);
+            = SurfacePoint(vec2d(params.value().y(), 0.0), t_iter_heh.idx, SurfacePointType::EdgePoint);
 
         // DEBUG
         auto pos = pnd.sp_on_target_.value()[vh_new].get_pos(strip.heh_pos_2d);
-        cd_2D.add_point(pos3(torch_to_pos2(pos)), BLUE).size(20);
-        // DEBUG_VAR(pos3(torch_to_pos2(pos)));
+        cd_2D.add_point(pos3_of_2D(pos), BLUE).size(20);
         //  END
 
         t_iter_heh = t_iter_heh.next().next().opposite();
@@ -972,7 +980,7 @@ void transform_v_sp_to_e_sp_front_back(
 }
 
 // from is facepoint, current is vertexpoint and next is facepoint
-void transform_special_case(TriangleStrip& _strip, TargetMeshData const& _tmd, PathNetworkData& _pnd, torch::Tensor const& layout_seg)
+void transform_special_case(TriangleStrip& _strip, TargetMeshData const& _tmd, PathNetworkData& _pnd, vec2d const& layout_A, vec2d const& layout_B)
 {
     auto pn_vh_prev = _strip.pn_vhs[0];
     auto pn_vh_curr = _strip.pn_vhs[1];
@@ -988,8 +996,8 @@ void transform_special_case(TriangleStrip& _strip, TargetMeshData const& _tmd, P
     auto t_face_pc = shared_face(sp_prev, sp_curr, *_tmd.mesh_);
     auto t_face_cn = shared_face(sp_curr, sp_next, *_tmd.mesh_);
 
-    auto l_pc = torch::norm(sp_curr.get_pos(_strip.heh_pos_2d) - sp_prev.get_pos(_strip.heh_pos_2d));
-    auto l_cn = torch::norm(sp_next.get_pos(_strip.heh_pos_2d) - sp_curr.get_pos(_strip.heh_pos_2d));
+    double const l_pc = (sp_curr.get_pos(_strip.heh_pos_2d) - sp_prev.get_pos(_strip.heh_pos_2d)).norm();
+    double const l_cn = (sp_next.get_pos(_strip.heh_pos_2d) - sp_curr.get_pos(_strip.heh_pos_2d)).norm();
 
     auto t_vh_curr = _tmd.mesh_->handle_of(sp_curr.heh_idx).vertex_from();
 
@@ -998,51 +1006,50 @@ void transform_special_case(TriangleStrip& _strip, TargetMeshData const& _tmd, P
     _strip.heh_pos_2d[t_start_hh] = _strip.heh_pos_2d[t_start_hh.opposite().next()];
     _strip.heh_pos_2d[t_start_hh.next()] = _strip.heh_pos_2d[t_start_hh.opposite()];
 
-    cd_2D.add_line(pos3(torch_to_pos2(_strip.heh_pos_2d[t_start_hh])), pos3(torch_to_pos2(_strip.heh_pos_2d[t_start_hh.next()])), GREEN);
+    cd_2D.add_line(pos3_of_2D(_strip.heh_pos_2d[t_start_hh].value()), pos3_of_2D(_strip.heh_pos_2d[t_start_hh.next()].value()), GREEN);
 
     HEH t_end_hh = t_face_cn.halfedges().filter([&](HEH t_heh) { return t_heh.vertex_from() == t_vh_curr; }).first();
     assert(t_end_hh.is_valid());
-    cd_2D.add_line(pos3(torch_to_pos2(_strip.heh_pos_2d[t_end_hh])), pos3(torch_to_pos2(_strip.heh_pos_2d[t_end_hh.next()])), RED).size(5);
+    cd_2D.add_line(pos3_of_2D(_strip.heh_pos_2d[t_end_hh].value()), pos3_of_2D(_strip.heh_pos_2d[t_end_hh.next()].value()), RED).size(5);
 
 
     puzzle_triangle_fan(t_start_hh, t_end_hh, _strip, _tmd);
     // make consistent
-    _strip.set_vertex_pos(t_end_hh.vertex_to(), _strip.heh_pos_2d[t_end_hh.next()]);
+    _strip.set_vertex_pos(t_end_hh.vertex_to(), _strip.heh_pos_2d[t_end_hh.next()].value());
 
     // 3. slightly adapt metric by rotation
-    torch::Tensor rotation_center1 = _strip.embedded_length * torch::tensor({1.0, 0.0}, torch::dtype(torch::kFloat64));
+    vec2d const rotation_center1 = _strip.embedded_length * vec2d(1.0, 0.0);
 
     double alpha = 0.2 * M_PI / 180.0; // 0.1 degrees in radians
-    double beta = -std::atan(std::tan(alpha) * l_pc.item<double>() / l_cn.item<double>());
+    double beta = -std::atan(std::tan(alpha) * l_pc / l_cn);
 
     // --- Rotation matrix ---
     auto c = std::cos(alpha);
     auto s = std::sin(alpha);
-    torch::Tensor R0 = torch::tensor({{c, -s}, {s, c}}, torch::kFloat64);
+    mat2d R0;
+    R0 << c, -s, s, c;
 
     c = std::cos(beta);
     s = std::sin(beta);
-    torch::Tensor R1 = torch::tensor({{c, -s}, {s, c}}, torch::kFloat64);
-
-    // length correction
-    auto length_correction = l_pc.item<double>() * (1.0 - 1.0 / std::tan(alpha)) + l_cn.item<double>() * (1.0 - 1.0 / std::tan(beta));
+    mat2d R1;
+    R1 << c, -s, s, c;
 
     for (auto t_heh : t_face_pc.halfedges())
     {
-        auto p = _strip.heh_pos_2d[t_heh];
-        auto rotated = torch::matmul(R0, p);
+        vec2d const p = _strip.heh_pos_2d[t_heh].value();
+        vec2d const rotated = R0 * p;
         _strip.heh_pos_2d[t_heh] = rotated;
     }
 
     for (auto t_heh : t_face_cn.halfedges())
     {
-        auto p = _strip.heh_pos_2d[t_heh] - rotation_center1;
-        auto rotated = torch::matmul(R1, p) + rotation_center1; // - length_correction * torch::tensor({0.0, 1.0}, torch::dtype(torch::kFloat64));
+        vec2d const p = _strip.heh_pos_2d[t_heh].value() - rotation_center1;
+        vec2d const rotated = R1 * p + rotation_center1;
         _strip.heh_pos_2d[t_heh] = rotated;
     }
 
     // make consistent with other triangles
-    _strip.set_vertex_pos(t_start_hh.vertex_from(), _strip.heh_pos_2d[t_start_hh.opposite().next()]);
+    _strip.set_vertex_pos(t_start_hh.vertex_from(), _strip.heh_pos_2d[t_start_hh.opposite().next()].value());
     _strip.heh_pos_2d[t_start_hh.next()] = _strip.heh_pos_2d[t_start_hh.opposite()];
     _strip.heh_pos_2d[t_end_hh.opposite()] = _strip.heh_pos_2d[t_end_hh.next()];
 
@@ -1057,24 +1064,22 @@ void transform_special_case(TriangleStrip& _strip, TargetMeshData const& _tmd, P
 
     while (should_continue)
     {
-        auto from_2D = _strip.heh_pos_2d[t_iter_heh];
-        auto to_2D = _strip.heh_pos_2d[t_iter_heh.next()];
+        vec2d const from_2D = _strip.heh_pos_2d[t_iter_heh].value();
+        vec2d const to_2D = _strip.heh_pos_2d[t_iter_heh.next()].value();
 
-        cd_2D.add_line(pos3(torch_to_pos2(from_2D)), pos3(torch_to_pos2(to_2D)), BLUE).size(2);
+        cd_2D.add_line(pos3_of_2D(from_2D), pos3_of_2D(to_2D), BLUE).size(2);
 
-        auto intersect_seg = torch::stack({to_2D, from_2D});
-        auto params = torch_compute_intersection_parameter(intersect_seg, layout_seg);
+        auto params = compute_intersection_parameter(to_2D, from_2D, layout_A, layout_B);
 
         auto vh_new = pn_heh.vertex_to();
         _strip.pn_vhs.push_back(vh_new);
 
         _pnd.sp_on_target_.value()[vh_new]
-            = SurfacePoint(torch::tensor({params[1].item<double>()}, torch::dtype(torch::kFloat64)), t_iter_heh.idx, SurfacePointType::EdgePoint);
+            = SurfacePoint(vec2d(params.value().y(), 0.0), t_iter_heh.idx, SurfacePointType::EdgePoint);
 
         // DEBUG
         auto pos = _pnd.sp_on_target_.value()[vh_new].get_pos(_strip.heh_pos_2d);
-        cd_2D.add_point(pos3(torch_to_pos2(pos)), BLUE).size(20);
-        // DEBUG_VAR(pos3(torch_to_pos2(pos)));
+        cd_2D.add_point(pos3_of_2D(pos), BLUE).size(20);
         //  END
 
         t_iter_heh = t_iter_heh.next().next().opposite();
@@ -1100,32 +1105,7 @@ void compute_triangle_strip(TriangleStrip& _strip, const EH _l_eh, TargetMeshDat
     _strip.l_eh = _l_eh;
     init_triangle_strip_pn_vhs(_strip, _l_eh, _pnd);
 
-    // if (_strip.l_eh.idx.value == 209)
-    // {
-    //     auto v = gv::view();
-    //     view_path_network(_tmd, _pnd);
-    //     auto c = gv::canvas();
-    //     c.add_faces(_tmd.pos_, BLUE_25);
-    //     c.add_lines(_tmd.pos_, BLUE);
-    //     for(int i = 0; i < _strip.pn_vhs.size() - 1; ++i)
-    //     {
-    //         auto const sp_curr = _pnd.sp_on_target_.value()(_strip.pn_vhs[i]);
-    //         c.add_point(torch_to_pos3(sp_curr.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get())), RED).size(20);
-
-    //         auto const sp_next = _pnd.sp_on_target_.value()(_strip.pn_vhs[i + 1]);
-    //         c.add_point(torch_to_pos3(sp_next.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get())), MAGENTA).size(20);
-
-    //         c.add_line(torch_to_pos3(sp_curr.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get())), torch_to_pos3(sp_next.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get())), GREEN).size(10);
-
-    //         if(!sp_curr.is_vertex_sp() || !sp_next.is_vertex_sp())
-    //         {
-    //             auto fh = shared_face(sp_curr, sp_next, *_tmd.mesh_.get());
-    //             DEBUG_VAR(fh)
-    //         }
-    //     }
-    // }
-
-    init_embedded_length(_strip, _tmd, _pnd);   
+    init_embedded_length(_strip, _tmd, _pnd);
 
     init_2D_strip_pos(_strip, _tmd, _ld, _pnd);
 
@@ -1171,10 +1151,6 @@ void init_triangle_strip_pn_vhs(TriangleStrip& _strip, const EH _l_eh, PathNetwo
         pn_heh_iter = pn_heh_iter.next();
     }
     _strip.pn_vhs.push_back(pn_heh_iter.vertex_from());
-
-
-
-
 }
 
 void init_embedded_length(TriangleStrip& _strip, TargetMeshData const& _tmd, PathNetworkData const& _pnd)
@@ -1198,7 +1174,7 @@ void init_2D_strip_pos(TriangleStrip& _strip, TargetMeshData const& _tmd, Layout
     init_3D_view(_tmd);
 
     // 1. init attribute to be computed
-    _strip.heh_pos_2d = _tmd.mesh_->halfedges().make_attribute<torch::Tensor>({});
+    _strip.heh_pos_2d = _tmd.mesh_->halfedges().make_attribute<std::optional<vec2d>>(std::nullopt);
 
     // 2. the embedding will be such that the geodesic corresponds to the positive x-axis. To determine the end point
     //    we need the total embedded length
@@ -1209,7 +1185,7 @@ void init_2D_strip_pos(TriangleStrip& _strip, TargetMeshData const& _tmd, Layout
     set_triangle_pos(_strip, 0, 1, true, _tmd, _pnd);
 
     // 4. the last point is at (l,0) and the second to last is aligned with x-axis in negative direction
-    auto displacement = total_length * torch::tensor({1.0, 0.0}, torch::dtype(torch::kFloat64));
+    vec2d const displacement = total_length * vec2d(1.0, 0.0);
     set_triangle_pos(_strip, _strip.pn_vhs.size() - 1, _strip.pn_vhs.size() - 2, false, _tmd, _pnd, displacement);
 
     // 5. find 2D positions of inner vertices
@@ -1233,7 +1209,7 @@ void init_2D_strip_pos(TriangleStrip& _strip, TargetMeshData const& _tmd, Layout
         // if the point is a vertex point, place it at the right distance along the X axis
         if (sp_curr.type == SurfacePointType::VertexPoint)
         {
-            auto position = traveled_distance * torch::tensor({1.0, 0.0}, torch::dtype(torch::kFloat64));
+            vec2d const position = traveled_distance * vec2d(1.0, 0.0);
             auto t_vh = _tmd.mesh_->handle_of(sp_curr.heh_idx).vertex_from();
             _strip.set_vertex_pos(t_vh, position);
             auto t_fh = shared_face(sp_prev, sp_curr, *_tmd.mesh_.get());
@@ -1243,7 +1219,7 @@ void init_2D_strip_pos(TriangleStrip& _strip, TargetMeshData const& _tmd, Layout
 
             for (auto t_heh : t_fh.halfedges())
             {
-                if (!_strip.heh_pos_2d[t_heh].defined())
+                if (!_strip.heh_pos_2d[t_heh].has_value())
                 {
                     if (t_heh.vertex_to() == t_vh) // pointing to vertex
                     {
@@ -1297,16 +1273,16 @@ void convert_to_snake_refactor(TriangleStrip& _strip, TargetMeshData const& _tmd
     auto sp_from = _pnd.sp_on_target_.value()[_strip.pn_vhs.front()];
     auto sp_to = _pnd.sp_on_target_.value()[_strip.pn_vhs.back()];
 
-    auto A = sp_from.get_pos(_strip.heh_pos_2d);
-    auto B = sp_to.get_pos(_strip.heh_pos_2d);
-    auto layout_seg = torch::stack({A, B});
+    vec2d const A = sp_from.get_pos(_strip.heh_pos_2d);
+    vec2d const B = sp_to.get_pos(_strip.heh_pos_2d);
 
     // special handeling
     if (_strip.pn_vhs.size() == 3)
     {
         if (_pnd.sp_on_target_.value()[_strip.pn_vhs[1]].is_vertex_sp())
         {
-            transform_special_case(_strip, _tmd, _pnd, layout_seg);
+            ++g_vertex_sp_conversion_count;
+            transform_special_case(_strip, _tmd, _pnd, A, B);
             // DEBUG_OUT("3 vertex case");
             //  {
             //      init_canvas();
@@ -1331,12 +1307,14 @@ void convert_to_snake_refactor(TriangleStrip& _strip, TargetMeshData const& _tmd
         if (_pnd.sp_on_target_.value()[pn_vh_curr].is_vertex_sp() && !_pnd.sp_on_target_.value()[pn_vh_next].is_vertex_sp())
         {
             // DEBUG_OUT("single");
-            transform_single_v_sp(i, pn_vhs, _strip, _pnd, _tmd, layout_seg);
+            ++g_vertex_sp_conversion_count;
+            transform_single_v_sp(i, pn_vhs, _strip, _pnd, _tmd, A, B);
         }
         else if (_pnd.sp_on_target_.value()[pn_vh_curr].is_vertex_sp() && _pnd.sp_on_target_.value()[pn_vh_next].is_vertex_sp())
         {
             // DEBUG_OUT("multiple");
-            auto j = transform_multiple_v_sp(i, pn_vhs, _strip, _pnd, _tmd, layout_seg);
+            ++g_vertex_sp_conversion_count;
+            auto j = transform_multiple_v_sp(i, pn_vhs, _strip, _pnd, _tmd, A, B);
             i = j;
         }
         else
@@ -1349,7 +1327,7 @@ void convert_to_snake_refactor(TriangleStrip& _strip, TargetMeshData const& _tmd
     // auto intersect_pn_vh_sec_to_last = pn_vhs[pn_vhs.size() - 2];
     // if (_pnd.sp_on_target_.value()[intersect_pn_vh_sec_to_last].is_vertex_sp())
     // {
-    //     transform_v_sp_to_e_sp_front_back(pn_vhs.size() - 2, pn_vhs, _strip, _pnd, _tmd, layout_seg);
+    //     transform_v_sp_to_e_sp_front_back(pn_vhs.size() - 2, pn_vhs, _strip, _pnd, _tmd, A, B);
     // }
 
     _strip.pn_vhs.push_back(pn_vhs.back());
@@ -1376,9 +1354,6 @@ void init_triangle_strip_t_fhs(TriangleStrip& _strip, TargetMeshData const& _tmd
         assert(!sp_prev.is_vertex_sp());
         assert(!sp_curr.is_vertex_sp());
 
-        // cd.add_point(torch_to_pos3(sp_prev.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get())), MAGENTA);
-        // cd.add_point(torch_to_pos3(sp_curr.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get())), MAGENTA);
-
         // if (_strip.l_eh.idx.value == 34)
         // {
         //     auto c = gv::canvas();
@@ -1398,10 +1373,8 @@ bool is_strip_valid(TriangleStrip& _strip, TargetMeshData const& _tmd, PathNetwo
     auto sp_from = _pnd.sp_on_target_.value()[_strip.pn_vhs.front()];
     auto sp_to = _pnd.sp_on_target_.value()[_strip.pn_vhs.back()];
 
-    auto A = sp_from.get_pos(_strip.heh_pos_2d);
-    auto B = sp_to.get_pos(_strip.heh_pos_2d);
-
-    auto layout_seg = torch::stack({A, B});
+    vec2d const A = sp_from.get_pos(_strip.heh_pos_2d);
+    vec2d const B = sp_to.get_pos(_strip.heh_pos_2d);
 
     bool valid = true;
     for (size_t i = 1; i < _strip.pn_vhs.size() - 1; ++i) // skip the first and the last as they are face points
@@ -1412,15 +1385,15 @@ bool is_strip_valid(TriangleStrip& _strip, TargetMeshData const& _tmd, PathNetwo
         if (!sp.is_edge_sp())
         {
             valid = false;
-            cd_2D.add_point(pos3(torch_to_pos2(sp.get_pos(_strip.heh_pos_2d))), MAGENTA).size(15);
+            cd_2D.add_point(pos3_of_2D(sp.get_pos(_strip.heh_pos_2d)), MAGENTA).size(15);
             continue;
         }
 
         auto intersect_hh = _tmd.mesh_->handle_of(sp.heh_idx);
 
-        auto from_2D = _strip.heh_pos_2d[intersect_hh];
+        auto const& from_2D_opt = _strip.heh_pos_2d[intersect_hh];
 
-        if (!from_2D.defined())
+        if (!from_2D_opt.has_value())
         {
             init_canvas_current_2D_pos(_strip);
             auto c = gv::canvas();
@@ -1429,9 +1402,9 @@ bool is_strip_valid(TriangleStrip& _strip, TargetMeshData const& _tmd, PathNetwo
             continue;
         }
 
-        auto to_2D = _strip.heh_pos_2d[intersect_hh.next()];
+        auto const& to_2D_opt = _strip.heh_pos_2d[intersect_hh.next()];
 
-        if (!to_2D.defined())
+        if (!to_2D_opt.has_value())
         {
             init_canvas_current_2D_pos(_strip);
             auto c = gv::canvas();
@@ -1440,27 +1413,29 @@ bool is_strip_valid(TriangleStrip& _strip, TargetMeshData const& _tmd, PathNetwo
             continue;
         }
 
-        auto tg_from = pos3(torch_to_pos2(from_2D));
-        auto tg_to = pos3(torch_to_pos2(to_2D));
+        vec2d const from_2D = from_2D_opt.value();
+        vec2d const to_2D = to_2D_opt.value();
+
+        auto tg_from = pos3_of_2D(from_2D);
+        auto tg_to = pos3_of_2D(to_2D);
         cd_2D.add_line(tg_from, tg_to, BLACK).size(4.0);
 
 
-        auto intersect_seg = torch::stack({to_2D, from_2D});
-        auto params = torch_compute_intersection_parameter(intersect_seg, layout_seg);
+        auto params = compute_intersection_parameter(to_2D, from_2D, A, B);
 
-        if (!params.defined() || (params[0].item<double>() < 0) || (params[0].item<double>() > 1.0))
+        if (!params.has_value() || (params.value().x() < 0) || (params.value().x() > 1.0))
         {
-            auto tg_from = pos3(torch_to_pos2(from_2D));
-            auto tg_to = pos3(torch_to_pos2(to_2D));
+            auto tg_from = pos3_of_2D(from_2D);
+            auto tg_to = pos3_of_2D(to_2D);
             cd_2D.add_line(tg_from, tg_to, RED).size(5.0);
 
-            if (params.defined())
+            if (params.has_value())
             {
                 DEBUG_VAR(_strip.l_eh)
-                DEBUG_VAR(params[0].item<double>())
-                DEBUG_VAR(params[1].item<double>())
+                DEBUG_VAR(params.value().x())
+                DEBUG_VAR(params.value().y())
 
-                auto alpha = params[1].item<double>();
+                auto alpha = params.value().y();
 
                 auto intersection_point = alpha * tg_from + (1.0 - alpha) * tg_to;
                 cd_2D.add_point(intersection_point, RED).size(15);
@@ -1478,10 +1453,6 @@ bool is_strip_valid(TriangleStrip& _strip, TargetMeshData const& _tmd, PathNetwo
     //     init_canvas_current_2D_pos(_strip);
     //     auto c = gv::canvas();
     //     c.add_data(cd_2D);
-
-    //     auto tg_from_2D = tg::pos3(torch_to_pos2(A));
-    //     auto tg_to_2D = tg::pos3(torch_to_pos2(B));
-    //     c.add_line(tg_from_2D, tg_to_2D, MAGENTA);
     // }
 
     return valid;

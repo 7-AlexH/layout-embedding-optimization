@@ -1,14 +1,14 @@
 #include "EmbeddingUtils.hh"
 #include <geometrycentral/surface/exact_geodesics.h>
-#include <torch/nn.h>
+#include "LayoutOpt/Adjoint/IntersectionStage.hh"
+#include "LayoutOpt/Adjoint/LeafStage.hh"
 #include "LayoutOpt/DataStructures/GCMesh.hh"
+#include "LayoutOpt/GeomUtils.hh"
 #include "LayoutOpt/Resample.hh"
-#include "LayoutOpt/TorchUtils.hh"
 #include "LayoutOpt/Utils.hh"
 #include "LayoutOpt/Visualization/ColorGenerator.hh"
 #include "LayoutOpt/Visualization/Colors.hh"
 #include "LayoutOpt/Visualization/Viewing.hh"
-#include "TorchUtils.hh"
 #include "geometrycentral/surface/flip_geodesics.h"
 #include "geometrycentral/surface/mesh_graph_algorithms.h"
 #include "polymesh/algorithms/triangulate.hh"
@@ -174,7 +174,7 @@ void compute_path_network(TargetMeshData const& _tmd, PathNetworkData& _pnd)
         assert(flip_out_handle.is_valid() && "currently only one sp per face is allowed");
 
         auto vh_new = flip_out_mesh.faces().split(flip_out_handle);
-        flip_out_pos[vh_new] = torch_to_pos3(sp.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get()));
+        flip_out_pos[vh_new] = eigen_to_pos3(sp.get_pos(_tmd.pos_mat_, *_tmd.mesh_.get()));
         map_to_flip_out_mesh[vh] = vh_new;
     }
     flip_out_mesh.compactify();
@@ -229,7 +229,7 @@ void compute_path_network(TargetMeshData const& _tmd, PathNetworkData& _pnd)
 
                 // DEBUG_VAR(alpha)
 
-                SurfacePoint sp = {torch::tensor({alpha}, torch::dtype(torch::kFloat64)), heh_emb, SurfacePointType::EdgePoint};
+                SurfacePoint sp = {vec2d(alpha, 0.0), heh_emb, SurfacePointType::EdgePoint};
 
                 // DEBUG_VAR(heh_emb.face())
                 // DEBUG_VAR(heh_emb.opposite_face())
@@ -331,7 +331,7 @@ void compute_path_network(TargetMeshData const& _tmd, PathNetworkData& _pnd)
 
                 for (auto heh_emb : detour_hehs)
                 {
-                    SurfacePoint sp = {torch::tensor({0.95}, torch::dtype(torch::kFloat64)), heh_emb, SurfacePointType::EdgePoint};
+                    SurfacePoint sp = {vec2d(0.95, 0.0), heh_emb, SurfacePointType::EdgePoint};
 
                     auto vh_new = _pnd.mesh_->halfedges().split(heh);
                     _pnd.sp_on_target_.value()[vh_new] = sp;
@@ -369,7 +369,7 @@ void compute_path_network_robust(TargetMeshData const& _tmd, PathNetworkData& _p
         assert(flip_out_handle.is_valid() && !flip_out_handle.is_removed() && "currently only one sp per face is allowed");
 
         auto vh_new = flip_out_mesh.faces().split(flip_out_handle);
-        flip_out_pos[vh_new] = torch_to_pos3(sp.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get()));
+        flip_out_pos[vh_new] = eigen_to_pos3(sp.get_pos(_tmd.pos_mat_, *_tmd.mesh_.get()));
         map_to_flip_out_mesh[vh] = vh_new;
     }
     flip_out_mesh.compactify();
@@ -421,7 +421,7 @@ void compute_path_network_robust(TargetMeshData const& _tmd, PathNetworkData& _p
 
                 auto alpha = intrinsic_point.tEdge;
 
-                SurfacePoint sp = {torch::tensor({alpha}, torch::dtype(torch::kFloat64)), heh_emb, SurfacePointType::EdgePoint};
+                SurfacePoint sp = {vec2d(alpha, 0.0), heh_emb, SurfacePointType::EdgePoint};
 
                 auto vh_new = _pnd.mesh_->halfedges().split(heh);
                 _pnd.sp_on_target_.value()[vh_new] = sp;
@@ -439,7 +439,7 @@ void compute_path_network_robust(TargetMeshData const& _tmd, PathNetworkData& _p
                 auto vhA = _tmd.mesh_->vertices()[idx];
                 auto heh_emb = vhA.any_outgoing_halfedge();
 
-                SurfacePoint sp = {torch::tensor({}, torch::dtype(torch::kFloat64)), heh_emb, SurfacePointType::VertexPoint};
+                SurfacePoint sp = {vec2d::Zero(), heh_emb, SurfacePointType::VertexPoint};
                 auto vh_new = _pnd.mesh_->halfedges().split(heh);
                 _pnd.sp_on_target_.value()[vh_new] = sp;
 
@@ -482,8 +482,8 @@ void compute_path_network_detour(TargetMeshData const& _tmd, PathNetworkData& _p
         auto sp_vh = _pnd.sp_on_target_.value()[pn_vh];
         auto t_vh = _tmd.mesh_->handle_of(sp_vh.heh_idx).vertex_from();
 
-        auto pos_init = _pnd.sp_on_target_.value()[pn_vh].get_pos(_tmd.torch_pos_, *_tmd.mesh_.get());
-        cd.add_point(torch_to_pos3(pos_init), GREEN).size(12);
+        vec3d const pos_init = _pnd.sp_on_target_.value()[pn_vh].get_pos(_tmd.pos_mat_, *_tmd.mesh_.get());
+        cd.add_point(eigen_to_pos3(pos_init), GREEN).size(12);
 
         assert(pn_vh.adjacent_vertices().size() == 2 && "expected this to be an inner vertex");
 
@@ -585,12 +585,12 @@ void compute_path_network_detour(TargetMeshData const& _tmd, PathNetworkData& _p
             gv::view(gv::lines(_tmd.pos_), BLUE_75);
             for (auto pn_eh : _pnd.mesh_->edges())
             {
-                auto posA = _pnd.sp_on_target_.value()[pn_eh.vertexA()].get_pos(_tmd.torch_pos_, *_tmd.mesh_.get());
-                auto posB = _pnd.sp_on_target_.value()[pn_eh.vertexB()].get_pos(_tmd.torch_pos_, *_tmd.mesh_.get());
+                vec3d const posA = _pnd.sp_on_target_.value()[pn_eh.vertexA()].get_pos(_tmd.pos_mat_, *_tmd.mesh_.get());
+                vec3d const posB = _pnd.sp_on_target_.value()[pn_eh.vertexB()].get_pos(_tmd.pos_mat_, *_tmd.mesh_.get());
 
-                cd.add_line(torch_to_pos3(posA), torch_to_pos3(posB), MAGENTA).size(8);
-                cd.add_point(torch_to_pos3(posA), RED).size(15);
-                cd.add_point(torch_to_pos3(posB), RED).size(15);
+                cd.add_line(eigen_to_pos3(posA), eigen_to_pos3(posB), MAGENTA).size(8);
+                cd.add_point(eigen_to_pos3(posA), RED).size(15);
+                cd.add_point(eigen_to_pos3(posB), RED).size(15);
             }
             c.add_data(cd);
         }
@@ -602,7 +602,7 @@ void compute_path_network_detour(TargetMeshData const& _tmd, PathNetworkData& _p
         assert(iter_heh.vertex_from() == end_heh.vertex_from());
         while (iter_heh != end_heh)
         {
-            SurfacePoint sp = {torch::tensor({0.98}, torch::dtype(torch::kFloat64)), iter_heh, SurfacePointType::EdgePoint};
+            SurfacePoint sp = {vec2d(0.98, 0.0), iter_heh, SurfacePointType::EdgePoint};
             auto pn_vh_new = _pnd.mesh_->halfedges().split(pn_incoming_heh);
             _pnd.sp_on_target_.value()[pn_vh_new] = sp;
             pn_incoming_heh = pn_incoming_heh.next();
@@ -688,14 +688,14 @@ void reset_embedding_data(LayoutData& _ld, PathNetworkData& _pnd, OverlayMeshDat
 {
     // reset layout
     _ld.map_to_overlay_vertices_.reset();
-    _ld.torch_embedded_edge_length_.reset();
+    _ld.embedded_edge_length_.reset();
 
     // reset path network
     _pnd.map_to_overlay_vertices_.reset();
     _pnd.t_.reset();
     _pnd.uvs_.reset();
-    _pnd.torch_t_.reset();
-    _pnd.torch_uvs_.reset();
+    _pnd.t_flat_.reset();
+    _pnd.uvs_flat_.reset();
 
     // reset overlay mesh
     _omd.patch_boundary_mask_.reset();
@@ -705,20 +705,46 @@ void reset_embedding_data(LayoutData& _ld, PathNetworkData& _pnd, OverlayMeshDat
 }
 
 
-void sync_tg_and_torch(OverlayMeshData& _omd)
+void compute_overlay_positions(std::vector<TriangleStrip> const& _strips, TargetMeshData const& _tmd, LayoutData const& _ld, PathNetworkData const& _pnd, OverlayMeshData& _omd)
 {
-    assert(_omd.torch_pos_.has_value());
+    assert(_ld.map_to_overlay_vertices_.has_value());
+    assert(_pnd.map_to_overlay_vertices_.has_value());
+
+    // start from what insert_path_network left in pos_: the target rows are
+    // final; the path-network rows are overwritten below
+    Eigen::MatrixX3d pos((Eigen::Index)_omd.mesh_->vertices().size(), 3);
+    for (auto o_vh : _omd.mesh_->vertices())
+    {
+        auto const& p = _omd.pos_[o_vh];
+        pos.row(o_vh.idx.value) = Eigen::RowVector3d(p.x, p.y, p.z);
+    }
+
+    // S1: layout-node rows (bary interpolation on the target faces). The 2D
+    // strip-endpoint outputs feed S3 below.
+    LeafCtx leaf;
+    leaf_collect(_strips, _tmd, _ld, _pnd, leaf);
+    Eigen::MatrixX2d const bary = collect_bary(_pnd);
+
+    int const n_l_edges = (int)_ld.mesh_->edges().size();
+    Eigen::MatrixX2d seg_a = Eigen::MatrixX2d::Zero(n_l_edges, 2);
+    Eigen::MatrixX2d seg_b = Eigen::MatrixX2d::Zero(n_l_edges, 2);
+    leaf_forward(leaf, bary, _tmd.pos_mat_, pos, seg_a, seg_b);
+
+    // S3: interior arc rows (3D point implied by the 2D strip intersection)
+    IntersectCtx ictx;
+    intersections_forward(_strips, seg_a, seg_b, _tmd, _ld, _pnd, ictx, pos);
 
     for (auto o_vh : _omd.mesh_->vertices())
     {
-        auto pos_new = torch_to_pos3(_omd.torch_pos_.value()[o_vh.idx.value]);
+        Eigen::RowVector3d const r = pos.row(o_vh.idx.value);
 
-        assert(!tg::is_nan(pos_new.x));
-        assert(!tg::is_nan(pos_new.y));
-        assert(!tg::is_nan(pos_new.z));
+        assert(!tg::is_nan(r.x()));
+        assert(!tg::is_nan(r.y()));
+        assert(!tg::is_nan(r.z()));
 
-        _omd.pos_[o_vh] = pos_new;
+        _omd.pos_[o_vh] = pos3(r.x(), r.y(), r.z());
     }
+    _omd.pos_mat_.emplace(std::move(pos));
 }
 
 pm::edge_attribute<int> compute_layout_edge_arc_idx(LayoutData const& _ld)
@@ -750,42 +776,6 @@ pm::edge_attribute<int> compute_layout_edge_arc_idx(LayoutData const& _ld)
     return arc_idx;
 }
 
-at::Tensor torch_compute_layout_edge_arc_idx(LayoutData const& _ld)
-{
-    auto const& mesh = *_ld.mesh_;
-    int64_t const num_edges = mesh.edges().size();
-
-    // -1 means "not assigned yet"
-    auto arc_idx = torch::full({num_edges}, -1, torch::TensorOptions().dtype(torch::kInt64));
-
-    int64_t current_idx = 0;
-    for (auto l_hh : mesh.halfedges())
-    {
-        auto l_eh = l_hh.edge();
-        auto l_vh = l_hh.vertex_from();
-
-        // Skip if inner vertex
-        if (l_vh.adjacent_vertices().size() <= 2)
-            continue;
-
-        // Already labeled?
-        if (arc_idx[l_eh.idx.value].item<int64_t>() != -1)
-            continue;
-
-        // Walk along arc
-        auto iter_hh = l_hh;
-        while (iter_hh.vertex_to().adjacent_vertices().size() == 2)
-        {
-            arc_idx[iter_hh.edge().idx.value] = current_idx;
-            iter_hh = iter_hh.next();
-        }
-
-        arc_idx[iter_hh.edge().idx.value] = current_idx;
-        current_idx++;
-    }
-    return arc_idx;
-}
-
 pm::edge_attribute<double> compute_embedded_length_per_layout_edge(TargetMeshData const& _tmd, LayoutData const& _ld, PathNetworkData const& _pnd)
 {
     assert(_pnd.sp_on_target_.has_value());
@@ -795,10 +785,10 @@ pm::edge_attribute<double> compute_embedded_length_per_layout_edge(TargetMeshDat
     {
         auto l_eh = _pnd.map_to_layout_edges_[pn_eh];
 
-        auto posA = _pnd.sp_on_target_.value()[pn_eh.vertexA()].get_pos(_tmd.torch_pos_, *_tmd.mesh_.get());
-        auto posB = _pnd.sp_on_target_.value()[pn_eh.vertexB()].get_pos(_tmd.torch_pos_, *_tmd.mesh_.get());
+        vec3d const posA = _pnd.sp_on_target_.value()[pn_eh.vertexA()].get_pos(_tmd.pos_mat_, *_tmd.mesh_.get());
+        vec3d const posB = _pnd.sp_on_target_.value()[pn_eh.vertexB()].get_pos(_tmd.pos_mat_, *_tmd.mesh_.get());
 
-        double length = torch::norm(posB - posA, 2).item<double>();
+        double length = (posB - posA).norm();
         embedded_length[l_eh] += length;
     }
 
@@ -877,7 +867,7 @@ void set_layout_pos_based_on_pn_sp(TargetMeshData const& _tmd, LayoutData& _ld, 
         [&](VH l_vh)
         {
             VH pn_vh = _pnd.mesh_->vertices()[l_vh.idx.value];
-            return torch_to_pos3(_pnd.sp_on_target_.value()[pn_vh].get_pos(_tmd.torch_pos_, *_tmd.mesh_.get()));
+            return eigen_to_pos3(_pnd.sp_on_target_.value()[pn_vh].get_pos(_tmd.pos_mat_, *_tmd.mesh_.get()));
         });
 }
 
@@ -888,11 +878,11 @@ bool pn_contains_degenerate_edges(TargetMeshData const& _tmd, PathNetworkData co
         auto spA = _pnd.sp_on_target_.value()[pn_eh.vertexA()];
         auto spB = _pnd.sp_on_target_.value()[pn_eh.vertexB()];
 
-        auto posA = spA.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get());
-        auto posB = spB.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get());
+        vec3d const posA = spA.get_pos(_tmd.pos_mat_, *_tmd.mesh_.get());
+        vec3d const posB = spB.get_pos(_tmd.pos_mat_, *_tmd.mesh_.get());
 
-        auto length = torch::norm(posA - posB);
-        if (length.item<double>() < MEDIUM_EPS)
+        double const length = (posA - posB).norm();
+        if (length < MEDIUM_EPS)
             return true;
     }
     return false;

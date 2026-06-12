@@ -1,17 +1,15 @@
 #include "Update.hh"
-#include <torch/nn/functional/normalization.h>
+
+#include <cassert>
+#include <vector>
+
 #include "LayoutOpt/DataStructures/SurfacePoint.hh"
-#include "LayoutOpt/TorchUtils.hh"
-
-
-#include <glow-extras/viewer/canvas.hh>
-#include "LayoutOpt/Visualization/ColorGenerator.hh"
-#include "LayoutOpt/Visualization/Colors.hh"
+#include "LayoutOpt/GeomUtils.hh"
 
 namespace LayoutOpt
 {
 
-pm::vertex_attribute<std::vector<SurfacePoint>> do_step(TargetMeshData const& _tmd, PathNetworkData& _pnd, pm::vertex_attribute<at::Tensor> const& _dirs, OptimizerData* _od)
+pm::vertex_attribute<std::vector<SurfacePoint>> do_step(TargetMeshData const& _tmd, PathNetworkData& _pnd, pm::vertex_attribute<vec2d> const& _dirs, OptimizerData* _od)
 {
     pm::vertex_attribute<std::vector<SurfacePoint>> traces(*_pnd.mesh_.get());
 
@@ -23,8 +21,15 @@ pm::vertex_attribute<std::vector<SurfacePoint>> do_step(TargetMeshData const& _t
         auto fh_canonical_frame = heh_canonical_frame.face();
         std::vector<VH> vhs_canonical_fame = {heh_canonical_frame.vertex_from(), heh_canonical_frame.vertex_to(), heh_canonical_frame.next().vertex_to()}; // A, B, C with C being the origin
 
-        auto sp_new = _pnd.sp_on_target_.value()[pn_vh].copy();
-        sp_new.bary_coords += _dirs[pn_vh];
+        // step in bary coords (do_step runs post-collapse: every sp is a FacePoint)
+        auto sp_new = cur_sp.copy();
+        {
+            vec3d const bary = cur_sp.bary_full();
+            vec2d const& dir = _dirs[pn_vh];
+            double const a_new = bary[0] + dir.x();
+            double const b_new = bary[1] + dir.y();
+            sp_new.bary_params = vec2d(a_new, b_new);
+        }
 
         if (sp_new.is_inside_element())
         {
@@ -34,38 +39,34 @@ pm::vertex_attribute<std::vector<SurfacePoint>> do_step(TargetMeshData const& _t
 
         // if the new sp is not inside the face, we have to unfold the strip to find the new face
         // build the first triangle in 2D
-        auto target_pos_2D = torch::zeros({_tmd.mesh_->vertices().size(), 2}, torch::dtype(torch::kFloat64));
-        auto face_2D_coords = torch_compute_2D_face_embedding(heh_canonical_frame, _tmd.torch_pos_);
+        Eigen::MatrixX2d target_pos_2D = Eigen::MatrixX2d::Zero((Eigen::Index)_tmd.mesh_->vertices().size(), 2);
+        auto const face_2D_coords = compute_2D_face_embedding(heh_canonical_frame, _tmd.pos_mat_);
         for (size_t i = 0; i < vhs_canonical_fame.size(); ++i)
         {
-            auto vh = vhs_canonical_fame[i];
-
-            target_pos_2D[vh.idx.value][0] = face_2D_coords[i][0];
-            target_pos_2D[vh.idx.value][1] = face_2D_coords[i][1];
+            target_pos_2D.row(vhs_canonical_fame[i].idx.value) = face_2D_coords.row(i);
         }
 
-        auto from_point_2D = cur_sp.get_pos(target_pos_2D, *_tmd.mesh_.get());
-        auto to_point_2D = sp_new.get_pos(target_pos_2D, *_tmd.mesh_.get());
-
-        auto update_seg = torch::stack({from_point_2D, to_point_2D});
+        vec2d const from_point_2D = cur_sp.get_pos(target_pos_2D, *_tmd.mesh_.get());
+        vec2d const to_point_2D = sp_new.get_pos(target_pos_2D, *_tmd.mesh_.get());
 
         auto iter_heh = HEH::invalid;
         // find first intersecting halfedge
         for (auto heh : fh_canonical_frame.halfedges())
         {
-            auto candidat_seg = torch::stack({target_pos_2D[heh.vertex_from().idx.value], target_pos_2D[heh.vertex_to().idx.value]});
-            auto params_for_candidat_seg = torch_compute_intersection_parameter(candidat_seg, update_seg);
-            auto params_for_update_seg = torch_compute_intersection_parameter(update_seg, candidat_seg);
+            vec2d const candidat_from = target_pos_2D.row(heh.vertex_from().idx.value).transpose();
+            vec2d const candidat_to = target_pos_2D.row(heh.vertex_to().idx.value).transpose();
+            auto const params_for_candidat_seg = compute_intersection_parameter(candidat_from, candidat_to, from_point_2D, to_point_2D);
+            auto const params_for_update_seg = compute_intersection_parameter(from_point_2D, to_point_2D, candidat_from, candidat_to);
 
-            if (!params_for_candidat_seg.defined())
+            if (!params_for_candidat_seg.has_value())
                 continue;
 
-            if (params_for_candidat_seg.min().item<double>() >= 0.0 && params_for_candidat_seg.max().item<double>() <= 1.0)
+            if (params_for_candidat_seg->minCoeff() >= 0.0 && params_for_candidat_seg->maxCoeff() <= 1.0)
             {
-                if (params_for_update_seg.min().item<double>() >= 0.0 - EPS && params_for_update_seg.max().item<double>() <= 1.0 + EPS)
+                if (params_for_update_seg->minCoeff() >= 0.0 - EPS && params_for_update_seg->maxCoeff() <= 1.0 + EPS)
                 {
                     iter_heh = heh;
-                    traces[pn_vh].push_back(SurfacePoint(torch::tensor({params_for_candidat_seg[0].item<double>()}), iter_heh, SurfacePointType::EdgePoint));
+                    traces[pn_vh].push_back(SurfacePoint(vec2d((*params_for_candidat_seg)[0], 0.0), iter_heh, SurfacePointType::EdgePoint));
                     break;
                 }
             }
@@ -80,40 +81,34 @@ pm::vertex_attribute<std::vector<SurfacePoint>> do_step(TargetMeshData const& _t
             auto hh = iter_heh;
             auto hh_opp = hh.opposite();
 
-            auto fn_a = torch_face_normal(hh.face(), _tmd.torch_pos_);
-            auto fn_b = torch_face_normal(hh_opp.face(), _tmd.torch_pos_);
+            vec3d const fn_b = face_normal(hh_opp.face(), _tmd.pos_mat_);
 
-            auto posA = _tmd.torch_pos_[hh_opp.vertex_from().idx.value];
-            auto posB = _tmd.torch_pos_[hh_opp.vertex_to().idx.value];
+            vec3d const posA = _tmd.pos_mat_.row(hh_opp.vertex_from().idx.value).transpose();
+            vec3d const posB = _tmd.pos_mat_.row(hh_opp.vertex_to().idx.value).transpose();
 
-            auto hh_opp_vec_norm = posB - posA;
-            hh_opp_vec_norm = torch::nn::functional::normalize(hh_opp_vec_norm, torch::nn::functional::NormalizeFuncOptions().p(2).dim(0));
-            auto height_vec_norm = torch::linalg_cross(fn_b, hh_opp_vec_norm);
-            height_vec_norm = torch::nn::functional::normalize(height_vec_norm, torch::nn::functional::NormalizeFuncOptions().p(2).dim(0));
+            vec3d const hh_opp_vec_norm = normalized_eps(vec3d(posB - posA));
+            vec3d const height_vec_norm = normalized_eps(fn_b.cross(hh_opp_vec_norm));
 
-            auto hh_opp_next_vec = _tmd.torch_pos_[hh_opp.next().vertex_to().idx.value] - _tmd.torch_pos_[hh_opp.next().vertex_from().idx.value];
-            auto height_vec_norm_for_real = torch::dot(hh_opp_next_vec, height_vec_norm);
-            auto height_vec = torch::dot(hh_opp_next_vec, height_vec_norm) * height_vec_norm;
+            vec3d const hh_opp_next_vec = _tmd.pos_mat_.row(hh_opp.next().vertex_to().idx.value).transpose() - _tmd.pos_mat_.row(hh_opp.next().vertex_from().idx.value).transpose();
+            double const height_vec_norm_for_real = hh_opp_next_vec.dot(height_vec_norm);
+            vec3d const height_vec = height_vec_norm_for_real * height_vec_norm;
 
-            auto proj_to_base = _tmd.torch_pos_[hh_opp.next().vertex_to().idx.value] - height_vec;
-            auto vec_to_proj_length = torch::dot(proj_to_base - posA, hh_opp_vec_norm);
-            auto vec_to_proj = torch::dot(proj_to_base - posA, hh_opp_vec_norm) * hh_opp_vec_norm;
+            vec3d const proj_to_base = vec3d(_tmd.pos_mat_.row(hh_opp.next().vertex_to().idx.value).transpose()) - height_vec;
+            double const vec_to_proj_length = (proj_to_base - posA).dot(hh_opp_vec_norm);
 
             // reconstruct in 2D
-            auto posA_2D = target_pos_2D[hh_opp.vertex_from().idx.value];
-            auto posB_2D = target_pos_2D[hh_opp.vertex_to().idx.value];
+            vec2d const posA_2D = target_pos_2D.row(hh_opp.vertex_from().idx.value).transpose();
+            vec2d const posB_2D = target_pos_2D.row(hh_opp.vertex_to().idx.value).transpose();
 
-            auto hh_opp_vec_norm_2D = posB_2D - posA_2D;
-            hh_opp_vec_norm_2D = torch::nn::functional::normalize(hh_opp_vec_norm_2D, torch::nn::functional::NormalizeFuncOptions().p(2).dim(0));
+            vec2d const hh_opp_vec_norm_2D = normalized_eps(vec2d(posB_2D - posA_2D));
 
-            auto height_vec_norm_2D = torch::stack({-hh_opp_vec_norm_2D[1], hh_opp_vec_norm_2D[0]});
-            auto height_point = posA_2D + vec_to_proj_length * hh_opp_vec_norm_2D + height_vec_norm_for_real * height_vec_norm_2D;
+            vec2d const height_vec_norm_2D(-hh_opp_vec_norm_2D.y(), hh_opp_vec_norm_2D.x());
+            vec2d const height_point = posA_2D + vec_to_proj_length * hh_opp_vec_norm_2D + height_vec_norm_for_real * height_vec_norm_2D;
 
             // // "opposite" vertex of hh
             auto opp_vh = hh.opposite().next().vertex_to();
 
-            target_pos_2D[opp_vh.idx.value][0] = height_point[0];
-            target_pos_2D[opp_vh.idx.value][1] = height_point[1];
+            target_pos_2D.row(opp_vh.idx.value) = height_point.transpose();
 
             fh_final = iter_heh.opposite_face();
             auto test_hehs = {iter_heh.opposite().next(), iter_heh.opposite().next().next()};
@@ -121,19 +116,20 @@ pm::vertex_attribute<std::vector<SurfacePoint>> do_step(TargetMeshData const& _t
 
             for (auto heh : test_hehs)
             {
-                auto candidat_seg = torch::stack({target_pos_2D[heh.vertex_from().idx.value], target_pos_2D[heh.vertex_to().idx.value]});
-                auto params_for_candidat_seg = torch_compute_intersection_parameter(candidat_seg, update_seg);
-                auto params_for_update_seg = torch_compute_intersection_parameter(update_seg, candidat_seg);
+                vec2d const candidat_from = target_pos_2D.row(heh.vertex_from().idx.value).transpose();
+                vec2d const candidat_to = target_pos_2D.row(heh.vertex_to().idx.value).transpose();
+                auto const params_for_candidat_seg = compute_intersection_parameter(candidat_from, candidat_to, from_point_2D, to_point_2D);
+                auto const params_for_update_seg = compute_intersection_parameter(from_point_2D, to_point_2D, candidat_from, candidat_to);
 
-                if (!params_for_candidat_seg.defined())
+                if (!params_for_candidat_seg.has_value())
                     continue;
 
-                if (params_for_candidat_seg.min().item<double>() >= 0.0 && params_for_candidat_seg.max().item<double>() <= 1.0)
+                if (params_for_candidat_seg->minCoeff() >= 0.0 && params_for_candidat_seg->maxCoeff() <= 1.0)
                 {
-                    if (params_for_update_seg.min().item<double>() >= 0.0 && params_for_update_seg.max().item<double>() <= 1.0)
+                    if (params_for_update_seg->minCoeff() >= 0.0 && params_for_update_seg->maxCoeff() <= 1.0)
                     {
                         iter_heh = heh;
-                        traces[pn_vh].push_back(SurfacePoint(torch::tensor({params_for_candidat_seg[0].item<double>()}), iter_heh, SurfacePointType::EdgePoint));
+                        traces[pn_vh].push_back(SurfacePoint(vec2d((*params_for_candidat_seg)[0], 0.0), iter_heh, SurfacePointType::EdgePoint));
                         break;
                     }
                 }
@@ -145,54 +141,26 @@ pm::vertex_attribute<std::vector<SurfacePoint>> do_step(TargetMeshData const& _t
 
         if (_od != nullptr)
         {
-            // auto c = gv::canvas();
+            // parallel-transport Adam's first moment: interpret it as bary coords in
+            // the canonical frame, walk the resulting vector into the final frame and
+            // re-express it in the final face's bary coords.
+            vec2d const& m = _od->m[pn_vh];
+            vec2d const canonical_A = target_pos_2D.row(vhs_canonical_fame[0].idx.value).transpose();
+            vec2d const canonical_B = target_pos_2D.row(vhs_canonical_fame[1].idx.value).transpose();
+            vec2d const canonical_C = target_pos_2D.row(vhs_canonical_fame[2].idx.value).transpose();
+            vec2d const adam_vec = m.x() * canonical_A + m.y() * canonical_B + (1.0 - m.x() - m.y()) * canonical_C;
 
-            // auto tg_canonical_pos0 = pos3(torch_to_pos2(target_pos_2D[vhs_canonical_fame[0].idx.value]));
-            // auto tg_canonical_pos1 = pos3(torch_to_pos2(target_pos_2D[vhs_canonical_fame[1].idx.value]));
-            // auto tg_canonical_origin = pos3(torch_to_pos2(target_pos_2D[vhs_canonical_fame[2].idx.value]));
-
-            // c.add_point(pos3::zero, BLACK_75).size(8);
-            // c.add_point(tg_canonical_origin, BLACK).size(10);
-            // c.add_face(tg_canonical_pos0, tg_canonical_pos1, tg_canonical_origin, BLUE_50);
-
-            // adam vec in canonical frame
-            auto sp_adam_vec_canonical_frame = _pnd.sp_on_target_.value()[pn_vh].copy();
-            sp_adam_vec_canonical_frame.bary_coords = _od->m[pn_vh];
-            auto adam_vec = sp_adam_vec_canonical_frame.get_pos(target_pos_2D, *_tmd.mesh_.get());
-            // vec3 tg_adam_vec = pos3(torch_to_pos2(adam_vec)) - tg_canonical_origin;
-
-            // c.add_line(tg_canonical_origin, tg_adam_vec, BLUE);
-
-            // auto tg_final_pos0 = pos3(torch_to_pos2(target_pos_2D[vhs_final[0].idx.value]));
-            // auto tg_final_pos1 = pos3(torch_to_pos2(target_pos_2D[vhs_final[1].idx.value]));
-            auto final_origin = target_pos_2D[vhs_final[2].idx.value];
-            // auto tg_final_origin = pos3(torch_to_pos2(final_origin));
-
-            // c.add_point(tg_final_origin, BLACK).size(10);
-            // c.add_face(tg_final_pos0, tg_final_pos1, tg_final_origin, MAGENTA_50);
+            vec2d const final_origin = target_pos_2D.row(vhs_final[2].idx.value).transpose();
 
             // in new frame
-            auto adam_vec_to_in_new_frame = final_origin + adam_vec;
-            // c.add_line(tg_final_origin, pos3(torch_to_pos2(adam_vec_to_in_new_frame)), MAGENTA_75);
+            vec2d const adam_vec_to_in_new_frame = final_origin + adam_vec;
 
-            auto bc_in_new_frame = torch_compute_bary_cords_2D(adam_vec_to_in_new_frame, heh_final, target_pos_2D);
-            _od->m[pn_vh] = torch::stack({bc_in_new_frame[0], bc_in_new_frame[1]});
-
-            // debug
-            // auto sp_debug = SurfacePoint(torch::stack({bc_in_new_frame[0], bc_in_new_frame[1]}), heh_final, SurfacePointType::FacePoint);
-            // auto tg_debug = pos3(torch_to_pos2(sp_debug.get_pos(target_pos_2D, *_tmd.mesh_.get())));
-
-            // c.add_point(tg_debug, MAGENTA).size(15);
-
-
-            // auto sp_origin = SurfacePoint(torch::zeros({2}, torch::dtype(torch::kFloat64)), heh_final, SurfacePointType::FacePoint);
-            // auto tg_origin = pos3(torch_to_pos2(sp_origin.get_pos(target_pos_2D, *_tmd.mesh_.get())));
-
-            // c.add_line(tg_origin, tg_debug, MAGENTA).size(10);
+            vec3d const bc_in_new_frame = compute_bary_coords_2D(adam_vec_to_in_new_frame, heh_final, target_pos_2D);
+            _od->m[pn_vh] = vec2d(bc_in_new_frame[0], bc_in_new_frame[1]);
         }
 
-        auto bc = torch_compute_bary_cords_2D(to_point_2D, heh_final, target_pos_2D);
-        sp_new = SurfacePoint(torch::stack({bc[0], bc[1]}), heh_final, SurfacePointType::FacePoint);
+        vec3d const bc = compute_bary_coords_2D(to_point_2D, heh_final, target_pos_2D);
+        sp_new = SurfacePoint(vec2d(bc[0], bc[1]), heh_final, SurfacePointType::FacePoint);
         _pnd.sp_on_target_.value()[pn_vh] = sp_new;
     }
     return traces;

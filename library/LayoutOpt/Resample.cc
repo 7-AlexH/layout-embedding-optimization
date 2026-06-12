@@ -3,8 +3,8 @@
 
 #include "LayoutOpt/Embedding.hh"
 #include "LayoutOpt/EmbeddingUtils.hh"
+#include "LayoutOpt/GeomUtils.hh"
 #include "LayoutOpt/IO.hh"
-#include "LayoutOpt/TorchUtils.hh"
 #include "LayoutOpt/Visualization/Colors.hh"
 #include "LayoutOpt/Visualization/Viewing.hh"
 namespace LayoutOpt
@@ -125,9 +125,9 @@ void resample_arc(int _arc_id, ResampleData const& _rd, TargetMeshData const& _t
 
     pn_hehs.push_back(pn_iter_heh);
 
-    auto posA = _pnd.sp_on_target_.value()[pn_iter_heh.vertex_from()].get_pos(_tmd.torch_pos_, *_tmd.mesh_.get());
-    auto posB = _pnd.sp_on_target_.value()[pn_iter_heh.vertex_to()].get_pos(_tmd.torch_pos_, *_tmd.mesh_.get());
-    current_length += torch::norm(posB - posA, 2).item<double>();
+    vec3d posA = _pnd.sp_on_target_.value()[pn_iter_heh.vertex_from()].get_pos(_tmd.pos_mat_, *_tmd.mesh_.get());
+    vec3d posB = _pnd.sp_on_target_.value()[pn_iter_heh.vertex_to()].get_pos(_tmd.pos_mat_, *_tmd.mesh_.get());
+    current_length += (posB - posA).norm();
 
     for (int i = 0; i < _num_of_segments - 1; ++i)
     {
@@ -136,22 +136,22 @@ void resample_arc(int _arc_id, ResampleData const& _rd, TargetMeshData const& _t
             assert(pn_iter_heh.vertex_to().adjacent_vertices().size() == 2);
             pn_iter_heh = pn_iter_heh.next();
             pn_hehs.push_back(pn_iter_heh);
-            auto posA = _pnd.sp_on_target_.value()[pn_iter_heh.vertex_from()].get_pos(_tmd.torch_pos_, *_tmd.mesh_.get());
-            auto posB = _pnd.sp_on_target_.value()[pn_iter_heh.vertex_to()].get_pos(_tmd.torch_pos_, *_tmd.mesh_.get());
+            vec3d const posA = _pnd.sp_on_target_.value()[pn_iter_heh.vertex_from()].get_pos(_tmd.pos_mat_, *_tmd.mesh_.get());
+            vec3d const posB = _pnd.sp_on_target_.value()[pn_iter_heh.vertex_to()].get_pos(_tmd.pos_mat_, *_tmd.mesh_.get());
 
-            current_length += torch::norm(posB - posA, 2).item<double>();
+            current_length += (posB - posA).norm();
         }
 
         // 4.2. new point on this edge
-        posA = _pnd.sp_on_target_.value()[pn_iter_heh.vertex_from()].get_pos(_tmd.torch_pos_, *_tmd.mesh_.get());
-        posB = _pnd.sp_on_target_.value()[pn_iter_heh.vertex_to()].get_pos(_tmd.torch_pos_, *_tmd.mesh_.get());
+        posA = _pnd.sp_on_target_.value()[pn_iter_heh.vertex_from()].get_pos(_tmd.pos_mat_, *_tmd.mesh_.get());
+        posB = _pnd.sp_on_target_.value()[pn_iter_heh.vertex_to()].get_pos(_tmd.pos_mat_, *_tmd.mesh_.get());
 
-        auto edge_length = torch::norm(posB - posA, 2).item<double>();
-        auto remaining_length = current_length - segment_length; // current_length is more than segment length
+        double const edge_length = (posB - posA).norm();
+        double const remaining_length = current_length - segment_length; // current_length is more than segment length
         double alpha = remaining_length / edge_length;
 
-        auto pos_new = alpha * posA + (1.0 - alpha) * posB;
-        new_positions.push_back(torch_to_pos3(pos_new));
+        vec3d const pos_new = alpha * posA + (1.0 - alpha) * posB;
+        new_positions.push_back(eigen_to_pos3(pos_new));
         current_length = remaining_length;
     }
 

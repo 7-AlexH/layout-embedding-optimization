@@ -1,7 +1,14 @@
 #pragma once
+#include "DataStructures/LayoutEmbedding.hh"
 #include "DataStructures/TriangleStrip.hh"
 namespace LayoutOpt
 {
+
+/// diagnostic: counts vertex-sp -> edge-sp conversions performed by
+/// convert_to_snake_refactor (each conversion perturbs the strip metric by
+/// ~LARGE_EPS by design, so trajectories that disagree in conversion counts
+/// diverge at the 1e-5 level). Read/reset by validation harnesses.
+extern long g_vertex_sp_conversion_count;
 
 void compute_triangle_strip(TriangleStrip& _strip, const EH _l_eh, TargetMeshData const& _tmd, LayoutData const& _ld, PathNetworkData& _pnd);
 

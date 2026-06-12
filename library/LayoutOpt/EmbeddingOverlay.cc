@@ -1,13 +1,13 @@
 #include "EmbeddingOverlay.hh"
 #include <glow-extras/viewer/view.hh>
 #include "LayoutOpt/EmbeddingUtils.hh"
-#include "LayoutOpt/TorchUtils.hh"
 #include "LayoutOpt/Utils.hh"
 #include "LayoutOpt/Visualization/Colors.hh"
 #include "LayoutOpt/Visualization/Viewing.hh"
 #include "glow-extras/viewer/canvas.hh"
 
 #include <cassert>
+#include <deque>
 
 namespace LayoutOpt
 {
@@ -472,11 +472,12 @@ void insert_edge_surface_points(TargetMeshData const& _tmd, PathNetworkData& _pn
 
         assert(!sp.is_vertex_sp());
 
-        auto pos_new = torch_to_pos3(sp.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get()));
+        vec3d const p = sp.get_pos(_tmd.pos_mat_, *_tmd.mesh_.get());
+        auto pos_new = pos3(p.x(), p.y(), p.z());
 
         if (tg::is_nan(pos_new.x) || tg::is_nan(pos_new.y) || tg::is_nan(pos_new.z))
         {
-            DEBUG_VAR(sp.bary_coords[0].item<double>())
+            DEBUG_VAR(sp.bary_full()[0])
         }
 
         auto t_eh = _tmd.mesh_->handle_of(sp.heh_idx).edge();
@@ -502,7 +503,8 @@ void insert_face_surface_points(TargetMeshData const& _tmd, PathNetworkData& _pn
         if (!sp.is_face_sp())
             continue;
 
-        auto pos_new = torch_to_pos3(sp.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get()));
+        vec3d const p = sp.get_pos(_tmd.pos_mat_, *_tmd.mesh_.get());
+        auto pos_new = pos3(p.x(), p.y(), p.z());
         auto vh_new = _omd.mesh_->vertices().add();
 
         _pnd.map_to_overlay_vertices_.value()[pn_vh] = vh_new.idx;

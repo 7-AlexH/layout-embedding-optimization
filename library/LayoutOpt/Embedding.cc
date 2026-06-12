@@ -4,13 +4,12 @@
 #include <glow-extras/viewer/view.hh>
 #include "LayoutOpt/DataStructures/GCMesh.hh"
 #include "LayoutOpt/DataStructures/TriangleStrip.hh"
-#include "LayoutOpt/DifferentiableIntersection.hh"
 #include "LayoutOpt/EmbeddingOverlay.hh"
 #include "LayoutOpt/EmbeddingUtils.hh"
 #include "LayoutOpt/FlattenTriangleStrip.hh"
+#include "LayoutOpt/GeomUtils.hh"
 #include "LayoutOpt/IO.hh"
 #include "LayoutOpt/Resample.hh"
-#include "LayoutOpt/TorchUtils.hh"
 #include "LayoutOpt/Utils.hh"
 #include "LayoutOpt/Visualization/Colors.hh"
 #include "LayoutOpt/Visualization/Viewing.hh"
@@ -26,7 +25,8 @@ namespace LayoutOpt
 namespace
 {
 
-void compute_layout_embedding_shared_part(TargetMeshData const& _tmd, LayoutData& _ld, PathNetworkData& _pnd, OverlayMeshData& _omd)
+void compute_layout_embedding_shared_part(
+    TargetMeshData const& _tmd, LayoutData& _ld, PathNetworkData& _pnd, OverlayMeshData& _omd, std::vector<TriangleStrip>* _strips_out = nullptr)
 {
     // view_path_network(_tmd, _pnd);
     // DEBUG_OUT("compute 2D embedding for each strip")
@@ -47,9 +47,11 @@ void compute_layout_embedding_shared_part(TargetMeshData const& _tmd, LayoutData
     // DEBUG_OUT("flood fill")
     compute_mapping_overlay_to_layout(_omd, _ld);
 
-    compute_differentiable_intersections_for_overlay_stable(strips, _tmd, _ld, _pnd, _omd);
+    // overlay positions via the plain S1+S3 forward
+    compute_overlay_positions(strips, _tmd, _ld, _pnd, _omd);
 
-    sync_tg_and_torch(_omd);
+    if (_strips_out)
+        *_strips_out = std::move(strips);
 }
 
 HEH find_halfedge_from_corner0(const FH& fh, PathNetworkData const& _pnd, OverlayMeshData const& _omd)
@@ -107,17 +109,19 @@ HEH find_halfedge_from_corner1(const FH& fh, const HEH& heh_from_corner0, PathNe
 }
 } // empty namespace
 
-void compute_layout_embedding_init(TargetMeshData const& _tmd, LayoutData& _ld, PathNetworkData& _pnd, OverlayMeshData& _omd, bool _allow_fallback_for_stability)
+void compute_layout_embedding_init(
+    TargetMeshData const& _tmd, LayoutData& _ld, PathNetworkData& _pnd, OverlayMeshData& _omd, bool _allow_fallback_for_stability, std::vector<TriangleStrip>* _strips_out)
 {
     // inits the path network
     // path network has same connect as layout now and surface points on the target are computed for the available vertices.
     init_path_network_surface_points(_tmd, _ld, _pnd, _allow_fallback_for_stability);
     compute_path_network_exact(_tmd, _ld, _pnd);
 
-    compute_layout_embedding_shared_part(_tmd, _ld, _pnd, _omd);
+    compute_layout_embedding_shared_part(_tmd, _ld, _pnd, _omd, _strips_out);
 }
 
-void compute_layout_embedding_update(TargetMeshData const& _tmd, LayoutData& _ld, PathNetworkData& _pnd, OverlayMeshData& _omd)
+void compute_layout_embedding_update(
+    TargetMeshData const& _tmd, LayoutData& _ld, PathNetworkData& _pnd, OverlayMeshData& _omd, std::vector<TriangleStrip>* _strips_out)
 {
     reset_embedding_data(_ld, _pnd, _omd);
     set_layout_pos_based_on_pn_sp(_tmd, _ld, _pnd);
@@ -129,7 +133,7 @@ void compute_layout_embedding_update(TargetMeshData const& _tmd, LayoutData& _ld
         compute_path_network_exact(_tmd, _ld, _pnd);
     }
 
-    compute_layout_embedding_shared_part(_tmd, _ld, _pnd, _omd);
+    compute_layout_embedding_shared_part(_tmd, _ld, _pnd, _omd, _strips_out);
 }
 
 void recover(TargetMeshData& _tmd, LayoutData& _ld, PathNetworkData& _pnd, OverlayMeshData& _omd)
@@ -139,7 +143,7 @@ void recover(TargetMeshData& _tmd, LayoutData& _ld, PathNetworkData& _pnd, Overl
     for (auto pn_vh : _pnd.mesh_->vertices())
     {
         assert(_pnd.sp_on_target_.value()[pn_vh].type == SurfacePointType::FacePoint);
-        _pnd.sp_on_target_.value()[pn_vh].bary_coords = torch::tensor({0.33, 0.33}, torch::dtype(torch::kFloat64).requires_grad(false));
+        _pnd.sp_on_target_.value()[pn_vh].bary_params = vec2d(0.33, 0.33);
     }
 
     reset_embedding_data(_ld, _pnd, _omd);
@@ -173,16 +177,14 @@ void init_path_network_surface_points(TargetMeshData const& _tmd, LayoutData& _l
              && bc.beta < 1.0 - LARGER_EPS && bc.gamma() < 1.0 - LARGER_EPS)
             || !_allow_fallback_for_stability)
         {
-            _pnd.sp_on_target_.value()[pn_vh]
-                = SurfacePoint(torch::tensor({bc.alpha, bc.beta}, torch::dtype(torch::kFloat64).requires_grad(false)), heh, SurfacePointType::FacePoint);
+            _pnd.sp_on_target_.value()[pn_vh] = SurfacePoint(vec2d(bc.alpha, bc.beta), heh, SurfacePointType::FacePoint);
         }
         else // for stability
         {
             bc = stabilize(bc, LARGER_EPS);
-            _pnd.sp_on_target_.value()[pn_vh]
-                = SurfacePoint(torch::tensor({bc.alpha, bc.beta}, torch::dtype(torch::kFloat64).requires_grad(false)), heh, SurfacePointType::FacePoint);
+            _pnd.sp_on_target_.value()[pn_vh] = SurfacePoint(vec2d(bc.alpha, bc.beta), heh, SurfacePointType::FacePoint);
 
-            _ld.pos_[l_vh] = torch_to_pos3(_pnd.sp_on_target_.value()[pn_vh].get_pos(_tmd.torch_pos_, *_tmd.mesh_.get()));
+            _ld.pos_[l_vh] = eigen_to_pos3(_pnd.sp_on_target_.value()[pn_vh].get_pos(_tmd.pos_mat_, *_tmd.mesh_.get()));
         }
     }
 
@@ -209,7 +211,8 @@ void compute_path_network_exact(TargetMeshData const& _tmd, LayoutData const& _l
         GeodesicAlgorithmExact gae(*(gcmesh.mesh.get()), *gcmesh.positionGeometry.get());
 
 #pragma omp for
-        for (size_t i = 0; i < l_ehs.size(); ++i)
+        // MSVC only implements OpenMP 2.0, which requires a signed loop counter.
+        for (int i = 0; i < static_cast<int>(l_ehs.size()); ++i)
         {
             auto l_eh = l_ehs[i];
 
@@ -224,25 +227,14 @@ void compute_path_network_exact(TargetMeshData const& _tmd, LayoutData const& _l
             // 3. get surfacepoints that should be connected
             auto const& sp_A = sp_on_target[pn_vhA];
             auto t_fh_A = sp_A.fh(*_tmd.mesh_.get());
-            double alphaA = sp_A.bary_coords[0].item<double>();
-            double betaA = sp_A.bary_coords[1].item<double>();
-            double gammaA = 1.0 - alphaA - betaA;
-            geometrycentral::surface::SurfacePoint spA(gcmesh.mesh->face(t_fh_A.idx.value), {betaA, gammaA, alphaA});
-
-            // cd.add_point(torch_to_pos3(sp_A.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get())), RED).size(5);
-            // auto pos = spA.interpolate(gcmesh.positionGeometry->inputVertexPositions);
-            // cd.add_point(pos3(pos.x, pos.y, pos.z), GREEN).size(7);
+            // gc wants {beta, gamma, alpha}; bary_full() is (alpha, beta, gamma)
+            vec3d const baryA = sp_A.bary_full();
+            geometrycentral::surface::SurfacePoint spA(gcmesh.mesh->face(t_fh_A.idx.value), {baryA[1], baryA[2], baryA[0]});
 
             auto const& sp_B = sp_on_target[pn_vhB];
             auto t_fh_B = sp_B.fh(*_tmd.mesh_.get());
-            double alphaB = sp_B.bary_coords[0].item<double>();
-            double betaB = sp_B.bary_coords[1].item<double>();
-            double gammaB = 1.0 - alphaB - betaB;
-            geometrycentral::surface::SurfacePoint spB(gcmesh.mesh->face(t_fh_B.idx.value), {betaB, gammaB, alphaB});
-
-            // cd.add_point(torch_to_pos3(sp_B.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get())), RED).size(5);
-            // pos = spB.interpolate(gcmesh.positionGeometry->inputVertexPositions);
-            // cd.add_point(pos3(pos.x, pos.y, pos.z), GREEN).size(7);
+            vec3d const baryB = sp_B.bary_full();
+            geometrycentral::surface::SurfacePoint spB(gcmesh.mesh->face(t_fh_B.idx.value), {baryB[1], baryB[2], baryB[0]});
 
             gae.propagate({spA}, GEODESIC_INF, {spB});
             auto path_intrinsic = gae.traceBack(spB);
@@ -270,7 +262,7 @@ void compute_path_network_exact(TargetMeshData const& _tmd, LayoutData const& _l
 
                     auto alpha = intrinsic_point.tEdge;
 
-                    SurfacePoint sp = {torch::tensor({alpha}, torch::dtype(torch::kFloat64)), heh_emb, SurfacePointType::EdgePoint};
+                    SurfacePoint sp = {vec2d(alpha, 0.0), heh_emb, SurfacePointType::EdgePoint};
                     edge_new_points[l_eh].push_back(sp);
                     break;
                 }
@@ -282,7 +274,7 @@ void compute_path_network_exact(TargetMeshData const& _tmd, LayoutData const& _l
                     auto vhA = _tmd.mesh_->vertices()[idx];
                     auto heh_emb = vhA.any_outgoing_halfedge();
 
-                    SurfacePoint sp = {torch::tensor({}, torch::dtype(torch::kFloat64)), heh_emb, SurfacePointType::VertexPoint};
+                    SurfacePoint sp = {vec2d::Zero(), heh_emb, SurfacePointType::VertexPoint};
                     edge_new_points[l_eh].push_back(sp);
                     break;
                 }
