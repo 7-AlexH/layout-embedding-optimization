@@ -1,14 +1,13 @@
 #pragma once
-// Phase 4 / S4 of the remove-autodiff plan: hand-rolled forward + reverse-mode
-// adjoint of the boundary-UV stage — the three "prepare" functions at the top
-// of harmonic_distortion_loss:
+// S4 of the adjoint chain (see documentation/adjointDifferentiation.md):
+// hand-rolled forward + reverse-mode adjoint of the boundary-UV stage, three
+// sub-stages run in sequence by hand_loss_forward:
 //
-//   torch_compute_embedded_layout_edge_lengths -> edge_lengths_forward/backward
-//   torch_compute_t_for_pn_halfedge            -> pn_t_forward/backward
-//   torch_compute_pn_uvs                       -> pn_uvs_forward/backward
+//   edge_lengths_forward/backward   per-layout-edge embedded arc lengths
+//   pn_t_forward/backward           arc-length parameter t per pn halfedge
+//   pn_uvs_forward/backward         boundary UVs per pn halfedge
 //
-// Stage boundary (validation per plan section 4/S4 — inputs treated as
-// leaves):
+// Stage boundary (inputs treated as leaves for validation):
 //   inputs  : overlay 3D positions [n_overlay_v x 3]
 //   outputs : per-layout-edge arc lengths [n_layout_e], per-pn-halfedge t
 //             [n_pn_heh], per-pn-halfedge boundary UVs [n_pn_heh x 2]
@@ -24,17 +23,17 @@
 // accumulate into d_lengths, so edge_lengths_backward must run last
 // (pn_uvs_backward -> pn_t_backward -> edge_lengths_backward).
 //
-// Faithfulness notes (vs the torch path):
+// Faithfulness notes (vs the original torch implementation):
 //  - segment norms are bare |a - b| (no epsilon); the adjoint divides by the
 //    saved norm, so a degenerate zero-length segment would produce inf/nan —
-//    exactly as the torch path would.
-//  - torch::max(0.02, res) on the patch length/height (max.other derivative):
-//    the gradient flows to res iff 0.02 <= res, else it is dropped.
-//  - the torch uv walk assigns each side's exit halfedge B and then overwrites
-//    it with the next side's A (bitwise the same value); side 0's start ends up
-//    holding B_3 whose corner factors are (0,0), identical in value and
-//    gradient (zero) to the overwritten A_0, so backward can treat every side
-//    start uniformly as A_i.
+//    exactly as the original would.
+//  - max(0.02, res) on the patch length/height follows torch's max.other
+//    derivative: the gradient flows to res iff 0.02 <= res, else it is dropped.
+//  - the original uv walk assigned each side's exit halfedge B and then
+//    overwrote it with the next side's A (bitwise the same value); side 0's
+//    start ends up holding B_3 whose corner factors are (0,0), identical in
+//    value and gradient (zero) to the overwritten A_0, so backward can treat
+//    every side start uniformly as A_i.
 
 #include <cstdint>
 #include <vector>
@@ -95,9 +94,9 @@ struct TCtx
     std::vector<TChain> chains;
 };
 
-// t[h_k] = 1 - (s_0 + ... + s_{k-1}) / total, walked exactly like the torch
-// function (both halfedge directions of every arc form their own chain).
-// Halfedges whose from-vertex is a layout corner keep t = 0.
+// t[h_k] = 1 - (s_0 + ... + s_{k-1}) / total; both halfedge directions of
+// every arc form their own chain (walk order preserved from the original
+// implementation). Halfedges whose from-vertex is a layout corner keep t = 0.
 void pn_t_forward(Eigen::MatrixX3d const& _pos,
                   Eigen::VectorXd const& _lengths,
                   LayoutData const& _ld,
@@ -144,7 +143,7 @@ struct UvCtx
 
 // Per layout face: L/H from the four side sums (or the 2.0 constants if
 // _fixed_parameter_domain), then walk the patch boundary assigning corner UVs
-// and t-interpolated UVs, exactly like torch_compute_pn_uvs.
+// and t-interpolated UVs.
 void pn_uvs_forward(Eigen::VectorXd const& _lengths,
                     Eigen::VectorXd const& _t,
                     LayoutData const& _ld,

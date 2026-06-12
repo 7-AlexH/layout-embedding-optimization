@@ -1,17 +1,20 @@
 // Permanent finite-difference gradient checker for the hand-rolled adjoint
-// chain (remove-autodiff Phase 6: the torch gradient oracle is gone; central
-// finite differences of the hand forward loss are the independent reference).
+// chain. The torch gradient oracle is gone (see documentation/plans/
+// remove-autodiff.md); central finite differences of the hand forward loss
+// are the independent reference.
 //
-// State: the canonical gradcheck state used throughout the plan — banana pair,
+// State: the canonical gradcheck state used throughout the remove-autodiff
+// plan — banana pair,
 // init(true) -> resample(0.2) -> init(false) — with the FULL production
 // configuration (w_h = 1, AIAP/AreaPreserving 0.5/0.5, w_c = 0.1).
 //
 // Check: compute_gradients_hand vs central differences (h = 1e-6) of the hand
 // forward loss w.r.t. the bary coords of sampled FacePoint path-network
-// vertices. Gate: 1e-5 rel (plan validation table), abs floor 1e-8.
+// vertices. Gate: 1e-5 rel (the remove-autodiff plan's validation table),
+// abs floor 1e-8.
 //
 // Smoothness guard: the loss landscape contains sliver-triangle regions that
-// are locally nonsmooth (diagnosed in Phase 5c: fd(1e-5) vs fd(1e-4) disagree
+// are locally nonsmooth (diagnosed in plan Phase 5c: fd(1e-5) vs fd(1e-4) disagree
 // in SIGN at some rows), where no finite difference is meaningful. Each sample
 // is cross-checked with a second step size (h2 = 1e-5); samples where the two
 // FD estimates disagree by more than 1e-3 RELATIVE TO THE FD MAGNITUDE

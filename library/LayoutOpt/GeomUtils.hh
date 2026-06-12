@@ -5,15 +5,15 @@
 
 namespace LayoutOpt
 {
-// remove-autodiff Phase 5: Eigen/plain-double ports of the TorchUtils geometry
-// helpers used by the detached (non-differentiable) pipeline stages. Each port
-// mirrors the torch implementation's arithmetic, including torch's normalize
-// semantics v / max(|v|, 1e-12).
+// Eigen/plain-double ports of the retired torch geometry helpers, used by the
+// detached (non-differentiable) pipeline stages. Each port mirrors the original
+// torch implementation's arithmetic, including torch's normalize semantics
+// v / max(|v|, 1e-12).
 
 vec3d normalized_eps(vec3d const& _v);
 vec2d normalized_eps(vec2d const& _v);
 
-/// Eigen counterpart of torch_to_pos3 for the detached stages.
+/// vec3d (Eigen) -> pos3 (typed-geometry), for the detached stages.
 inline pos3 eigen_to_pos3(vec3d const& _v) { return pos3(_v.x(), _v.y(), _v.z()); }
 
 /**
@@ -40,7 +40,7 @@ Eigen::Matrix<double, 3, 2> compute_2D_face_embedding(
 
 /// Barycentric coordinates of _point wrt the (2D-embedded) face corners of _heh
 /// (vertex_from, vertex_to, next().vertex_to()), via the same homogeneous 3x3
-/// partial-pivot LU solve as the torch path (torch::linalg_solve).
+/// partial-pivot LU solve as the original torch implementation (torch::linalg_solve).
 vec3d compute_bary_coords_2D(vec2d const& _point, HEH const& _heh, Eigen::MatrixX2d const& _pos);
 
 vec3d face_normal(FH const& _fh, Eigen::MatrixX3d const& _pos);

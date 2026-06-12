@@ -1,13 +1,15 @@
 #pragma once
-// Phase 4 / curvature-alignment item of the remove-autodiff plan: hand-rolled
-// forward + reverse-mode adjoint of principal_curvature_alignment_loss
-// (ObjectiveFunctions.cc). This is an INDEPENDENT loss branch: it reads only
+// Curvature-alignment branch of the adjoint chain (see
+// documentation/adjointDifferentiation.md): hand-rolled forward +
+// reverse-mode adjoint of the principal-curvature alignment loss.
+// This is an INDEPENDENT loss branch: it reads only
 // the overlay 3D positions — the direction-field basis/dir/confidence are
 // precomputed from the FIXED target mesh and carry no gradient — so its
 // backward accumulates straight into d_overlay_pos alongside the S4..S7 chain
 // (no ordering constraint w.r.t. the other stages).
 //
-// Math per pn edge, in pn-edge iteration order (mirrors the torch loop):
+// Math per pn edge, in pn-edge iteration order (preserved from the original
+// torch implementation):
 //   vec   = pos[om_a] - pos[om_b]      (overlay endpoints of the pn edge)
 //   n     = |vec|                      (bare norm, no eps)
 //   v2    = basis * vec                (constant 2x3 tangent basis of the
@@ -18,15 +20,14 @@
 //   loss  = sum_e(n_e * align_e) / sum_e(n_e)
 //
 // Faithfulness notes:
-//  * the commented-out `* direction_data.confidence` factor in the torch loop
-//    is dead code and is NOT mirrored.
+//  * the original loop carried a commented-out `* direction_data.confidence`
+//    factor (dead code); it is NOT mirrored here.
 //  * n appears in numerator and denominator; both quotient paths feed d_n.
 //  * at vec = 0 (degenerate segment) or v2 = 0 (segment orthogonal to the
-//    tangent plane) the derivative is 0/0 = NaN in torch too — mirrored bare,
-//    no epsilon.
-//  * torch sums via stack().sum(); the hand path accumulates sequentially in
-//    edge order. As with S4, expect the forward to match to ~ulp, not bitwise
-//    (std::atan2/cos/sin vs torch kernels, summation order).
+//    tangent plane) the derivative is 0/0 = NaN — the original torch
+//    implementation produced NaN here too, so no epsilon is added.
+//  * summation is sequential in edge order (the original summed via
+//    stack().sum(); values agreed to ~ulp, not bitwise).
 
 #include <vector>
 

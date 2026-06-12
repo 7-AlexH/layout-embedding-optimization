@@ -5,9 +5,9 @@ namespace LayoutOpt
 
 namespace
 {
-// The cotan-division regularizer from torch_cotans (TorchUtils.cc). NOT the
-// Types EPS (1e-9) — torch_cotans uses 1e-10 literally, and it only appears in
-// the division, not in the norm whose derivative is taken.
+// The cotan-division regularizer. NOT the Types EPS (1e-9) — the original
+// implementation used 1e-10 literally, and it only appears in the division,
+// not in the norm whose derivative is taken.
 constexpr double kCotanEps = 1e-10;
 } // namespace
 

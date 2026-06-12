@@ -140,7 +140,7 @@ void pn_t_forward(Eigen::MatrixX3d const& _pos,
             chain.steps.push_back(s);
             pn_iter_heh = pn_iter_heh.next();
         }
-        _t(pn_iter_heh.idx.value) = 0.0; // matches the torch zero re-assignment
+        _t(pn_iter_heh.idx.value) = 0.0; // explicit zero at the chain exit, preserved from the original
     }
 }
 
@@ -188,8 +188,8 @@ void pn_t_backward(TCtx const& _ctx,
 
 namespace
 {
-// the constant corner factors from torch_compute_pn_uvs (float literals 0/1
-// promoted to double — exact)
+// the constant corner factors of the unit parameter domain (the original
+// implementation's float literals 0/1, promoted to double — exact)
 constexpr double kFactors[4][2] = {{0.0, 0.0}, {1.0, 0.0}, {1.0, 1.0}, {0.0, 1.0}};
 } // namespace
 
@@ -227,7 +227,7 @@ void pn_uvs_forward(Eigen::VectorXd const& _lengths,
         }
         else
         {
-            // sum the layout-edge chains of the 4 sides (walk order = torch's)
+            // sum the layout-edge chains of the 4 sides (original walk order)
             auto l_heh_iter = l_heh;
             auto sum_side = [&](std::vector<int>& _edges) -> double
             {
@@ -284,8 +284,8 @@ void pn_uvs_forward(Eigen::VectorXd const& _lengths,
                 rec.sides[i].inner_heh.push_back(pn_iter_heh.idx.value);
                 pn_iter_heh = pn_iter_heh.next();
             }
-            // the exit halfedge is the next side's start; like the torch code,
-            // assign B here — it is overwritten by the next side's A with the
+            // the exit halfedge is the next side's start; assign B here (as the
+            // original did) — it is overwritten by the next side's A with the
             // same value (after side 3 it re-writes side 0's start with (0,0))
             _uvs(pn_iter_heh.idx.value, 0) = bx;
             _uvs(pn_iter_heh.idx.value, 1) = by;
@@ -336,7 +336,7 @@ void pn_uvs_backward(UvCtx const& _ctx,
 
         if (!_ctx.fixed_domain)
         {
-            // torch::max(0.02, res) (max.other): grad to res iff 0.02 <= res
+            // max(0.02, res), torch max.other convention: grad to res iff 0.02 <= res
             double const d_len_res = rec.length_res >= 0.02 ? d_L : 0.0;
             double const d_hgt_res = rec.height_res >= 0.02 ? d_H : 0.0;
 

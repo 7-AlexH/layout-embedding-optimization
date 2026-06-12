@@ -231,18 +231,10 @@ void compute_path_network_exact(TargetMeshData const& _tmd, LayoutData const& _l
             vec3d const baryA = sp_A.bary_full();
             geometrycentral::surface::SurfacePoint spA(gcmesh.mesh->face(t_fh_A.idx.value), {baryA[1], baryA[2], baryA[0]});
 
-            // cd.add_point(torch_to_pos3(sp_A.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get())), RED).size(5);
-            // auto pos = spA.interpolate(gcmesh.positionGeometry->inputVertexPositions);
-            // cd.add_point(pos3(pos.x, pos.y, pos.z), GREEN).size(7);
-
             auto const& sp_B = sp_on_target[pn_vhB];
             auto t_fh_B = sp_B.fh(*_tmd.mesh_.get());
             vec3d const baryB = sp_B.bary_full();
             geometrycentral::surface::SurfacePoint spB(gcmesh.mesh->face(t_fh_B.idx.value), {baryB[1], baryB[2], baryB[0]});
-
-            // cd.add_point(torch_to_pos3(sp_B.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get())), RED).size(5);
-            // pos = spB.interpolate(gcmesh.positionGeometry->inputVertexPositions);
-            // cd.add_point(pos3(pos.x, pos.y, pos.z), GREEN).size(7);
 
             gae.propagate({spA}, GEODESIC_INF, {spB});
             auto path_intrinsic = gae.traceBack(spB);

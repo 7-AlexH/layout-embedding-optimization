@@ -12,7 +12,7 @@ FaceDistortionCtx face_distortion_forward(vec2d const& _a2, vec2d const& _b2, ve
 {
     FaceDistortionCtx c;
 
-    // --- triangle rebuild (mirrors torch_face_distortion) ---
+    // --- triangle rebuild: edge lengths + included angle per triangle ---
     c.ab3 = _b3 - _a3;
     c.ac3 = _c3 - _a3;
     c.ab2 = _b2 - _a2;
@@ -30,7 +30,7 @@ FaceDistortionCtx face_distortion_forward(vec2d const& _a2, vec2d const& _b2, ve
     vec3d const axis = c.u_ab3.cross(c.u_ac3);
     double const axis_norm = axis.norm();
     c.unit_axis = axis / axis_norm;
-    c.num3 = axis.dot(c.unit_axis); // torch: dot(cross(uAB3, uAC3), unit_axis)
+    c.num3 = axis.dot(c.unit_axis); // = |axis|, computed as dot(axis, axis/|axis|) like the original
     c.den3 = c.u_ab3.dot(c.u_ac3);
     c.angle3 = std::atan2(c.num3, c.den3);
 
@@ -48,7 +48,7 @@ FaceDistortionCtx face_distortion_forward(vec2d const& _a2, vec2d const& _b2, ve
     c.ref_area = 0.5 * (c.ref_B.x() * c.ref_C.y() - c.ref_B.y() * c.ref_C.x());
     c.param_area = 0.5 * (c.param_B.x() * c.param_C.y() - c.param_B.y() * c.param_C.x());
 
-    // early-outs, same order as torch (NaN areas fall through the first
+    // early-outs, same order as the original (NaN areas fall through the first
     // comparison and are caught by the self-inequality check)
     if (c.ref_area < EPS || c.param_area < EPS)
     {
@@ -64,7 +64,7 @@ FaceDistortionCtx face_distortion_forward(vec2d const& _a2, vec2d const& _b2, ve
         c.param_area = 0.0;
         return c;
     }
-    assert(c.ref_area >= 0 && c.param_area >= 0); // TORCH_CHECK parity (unreachable: areas >= EPS here)
+    assert(c.ref_area >= 0 && c.param_area >= 0); // check kept from the original (unreachable: areas >= EPS here)
 
     // J = M_param * M_ref^-1, columns are the edge vectors
     mat2d M;
@@ -75,7 +75,7 @@ FaceDistortionCtx face_distortion_forward(vec2d const& _a2, vec2d const& _b2, ve
     c.K = M.inverse();
     mat2d const J = c.P * c.K;
 
-    // closed-form 2x2 singular values (torch_singular_values)
+    // closed-form 2x2 singular values
     c.e = (J(0, 0) + J(1, 1)) * 0.5;
     c.f = (J(0, 0) - J(1, 1)) * 0.5;
     c.g = (J(1, 0) + J(0, 1)) * 0.5;
@@ -88,7 +88,7 @@ FaceDistortionCtx face_distortion_forward(vec2d const& _a2, vec2d const& _b2, ve
     double dist = 0.0;
     if (_opt.w_SDE_DirectComputation > 0)
     {
-        // literal port incl. the (ra*ra/pa)*pa association of the torch code
+        // literal port incl. the original's (ra*ra/pa)*pa association
         double const factor1 = 1.0 + (c.ref_area * c.ref_area / c.param_area * c.param_area);
 
         double const norm_ref_AB = c.ref_B.norm();
@@ -114,8 +114,8 @@ FaceDistortionCtx face_distortion_forward(vec2d const& _a2, vec2d const& _b2, ve
     }
     if (_opt.w_AIAP_SingValDecomp > 0)
     {
-        // same value comparison as torch (subgradient: only the selected
-        // singular values receive gradient)
+        // same value comparison as the original (subgradient: only the
+        // selected singular values receive gradient)
         double s_min, s_max;
         if (c.s0 < c.s1)
         {
@@ -149,7 +149,7 @@ FaceDistortionGrad face_distortion_backward(FaceDistortionCtx const& c,
 {
     FaceDistortionGrad gr; // members zero-initialized
     if (c.skipped)
-        return gr; // torch returns fresh disconnected zeros: no gradient flows
+        return gr; // skipped faces contribute zero value AND zero gradient
 
     // adjoint accumulators
     double s0b = 0.0, s1b = 0.0;
@@ -224,7 +224,7 @@ FaceDistortionGrad face_distortion_backward(FaceDistortionCtx const& c,
     if (_opt.w_AIAP_SingValDecomp > 0)
     {
         double const w = _opt.w_AIAP_SingValDecomp * _d_distortion;
-        bool const sel = c.s0 < c.s1; // same comparison as forward/torch
+        bool const sel = c.s0 < c.s1; // same comparison as forward
         double const s_min = sel ? c.s0 : c.s1;
         double const s_max = sel ? c.s1 : c.s0;
         rab += w * (s_max * s_max + 1.0 / (s_min * s_min));

@@ -1,23 +1,22 @@
 #pragma once
-// Phase 4 / S7 of the remove-autodiff plan: hand-rolled forward + reverse-mode
-// adjoint of the distortion stage. Per overlay face: rebuild the 2D
-// reference/parameter triangles from the corner positions (3D overlay
-// positions / 2D patch UVs), J = M_param * M_ref^-1, closed-form 2x2 singular
-// values, weighted distortion branches (compute_distortion); per-patch
+// S7 of the adjoint chain (see documentation/adjointDifferentiation.md):
+// hand-rolled forward + reverse-mode adjoint of the distortion stage. Per
+// overlay face: rebuild the 2D reference/parameter triangles from the corner
+// positions (3D overlay positions / 2D patch UVs), J = M_param * M_ref^-1,
+// closed-form 2x2 singular values, weighted distortion branches; per-patch
 // summation; loss assembly across patches.
 //
-// Mirrors the torch path (torch_face_distortion / compute_distortion /
-// harmonic_distortion_loss) exactly: same op structure, same early-outs, same
-// subgradient choices —
+// Mirrors the original torch implementation exactly: same op structure, same
+// early-outs, same subgradient choices —
 //   * early-out faces (ref/param area < EPS, or NaN areas) contribute zero
-//     value AND zero gradient (torch returns fresh disconnected zero tensors);
+//     value AND zero gradient (the original returned fresh disconnected zero
+//     tensors);
 //   * the AIAP min/max selection is by the same value comparison (s0 < s1),
 //     and gradient flows only through the selected singular values;
 //   * the (dead, const-false) `normalized` per-patch-area branch is kept for
 //     parity in the loss assembly.
 //
-// Stage boundary (validation per plan section 4/S7 — inputs treated as
-// leaves):
+// Stage boundary (inputs treated as leaves for validation):
 //   inputs  : per-patch inner UVs [n_inner x 2] (S6 output), per-patch
 //             boundary UVs (S4 output), overlay 3D positions [n_overlay x 3]
 //             (S1/S3 output)
@@ -27,7 +26,7 @@
 #include <vector>
 
 #include <LayoutOpt/DataStructures/Types.hh>
-#include <LayoutOpt/ObjectiveFunctions.hh> // MappingIndex (include chain de-torched in Phase 6)
+#include <LayoutOpt/ObjectiveFunctions.hh> // MappingIndex
 #include <LayoutOpt/OptimizationOptions.hh>
 
 namespace LayoutOpt
@@ -85,8 +84,8 @@ struct PatchDistortionCtx
     std::vector<FaceDistortionCtx> faces;
 };
 
-// Gather (via _map_to_vec, as produced by torch_prepare_param) + per-face
-// forward over one patch.
+// Gather (via _map_to_vec, as produced by prepare_param) + per-face forward
+// over one patch.
 PatchDistortionCtx patch_distortion_forward(std::vector<FH> const& _patch_fhs,
                                             pm::vertex_attribute<MappingIndex> const& _map_to_vec,
                                             Eigen::MatrixX2d const& _inner_uvs,
@@ -107,7 +106,7 @@ void patch_distortion_backward(PatchDistortionCtx const& _ctx,
 
 // Loss assembly across patches: sum_p sde_p, or sum_p sde_p / param_area_p
 // when _normalized (dead code today — HarmonicOptions::normalized is const
-// false — kept for parity with the torch path).
+// false — kept for parity with the original implementation).
 double distortion_loss_forward(std::vector<PatchDistortionCtx> const& _patches, bool _normalized);
 
 // Adjoint of distortion_loss_forward: per-patch (d_sde, d_param_area) seeds.

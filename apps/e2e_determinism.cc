@@ -1,6 +1,7 @@
-// Permanent end-to-end determinism check (remove-autodiff Phase 6: replaces
-// the torch-vs-hand e2e_phase4 harness — there is only one gradient path now,
-// so the e2e property worth gating is exact reproducibility).
+// Permanent end-to-end determinism check. Replaces the retired torch-vs-hand
+// e2e comparison harness (see documentation/plans/remove-autodiff.md) — there
+// is only one gradient path now, so the e2e property worth gating is exact
+// reproducibility.
 //
 // Two COMPLETE production runs over identical fresh data (banana pair, the
 // FULL production configuration from optimize.cc: w_h=1, AIAP/AreaPreserving
@@ -14,8 +15,8 @@
 // Gates (all BITWISE — the hand adjoint pipeline is sequential plain-double
 // arithmetic with no reassociation sources, so two runs over the same input
 // must agree exactly):
-//   - iter-0 loss vs the recorded Phase-3 reference (rel 1e-12; ulp-level
-//     drift allowed since Phase 5b moved detached reads onto Eigen)
+//   - iter-0 loss vs the recorded reference (rel 1e-12; ulp-level drift
+//     allowed since plan Phase 5b moved detached reads onto Eigen)
 //   - per-iteration loss A == B exactly
 //   - discrete state fingerprints (vertex-sp conversion counts, pn vertex
 //     count, sp type counts, anchor-heh sum) EQ at every iteration
@@ -24,7 +25,7 @@
 //
 // A failure here means nondeterminism crept into the pipeline (unordered
 // iteration, uninitialized reads, parallel reduction) — exactly the property
-// Phase 6d's OpenMP work must preserve.
+// the OpenMP parallelization in hand_loss_forward must preserve.
 //
 // All raw values go to e2e_determinism.txt at %.17g.
 

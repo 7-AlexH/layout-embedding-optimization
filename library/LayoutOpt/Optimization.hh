@@ -13,7 +13,7 @@ namespace LayoutOpt
 /// @brief evaluates the objective function and computes gradients as well as update directions.
 ///        _strips are the per-layout-edge triangle strips the current embedding was built from
 ///        (out-param of compute_layout_embedding_init/update) — the hand-rolled adjoint chain
-///        differentiates through their 2D flattening (remove-autodiff Phase 6b).
+///        differentiates through their 2D flattening (see Adjoint/HandGradients.hh).
 EvalInfo eval(TargetMeshData& _tmd,
               LayoutData& _ld,
               PathNetworkData& _pnd,

@@ -1,41 +1,44 @@
 #pragma once
-// Phase 4 / S1 of the remove-autodiff plan: hand-rolled forward + reverse-mode
-// adjoint of the LEAF stage — the SurfacePoint::get_pos interpolations that
-// connect the free variables (the layout-node face-point barycentrics, plan
+// S1 of the adjoint chain (see documentation/adjointDifferentiation.md):
+// hand-rolled forward + reverse-mode adjoint of the LEAF stage — the
+// SurfacePoint::get_pos interpolations that connect the free variables (the
+// layout-node face-point barycentrics; see the remove-autodiff plan,
 // "Phase 2 result") to the rest of the chain:
 //
 //  (a) 3D layout-node overlay rows (compute_differentiable_surface_points):
 //      per pn vertex with a valid map_to_layout_vertices_ entry,
 //        pos[o_row] = alpha*A + beta*B + (1 - alpha - beta)*C
 //      with A/B/C the target positions of (hh.from, hh.to, hh.next.to) for the
-//      sp's halfedge hh — the get_pos(|V|x3 tensor, mesh) corner convention.
+//      sp's halfedge hh — the get_pos(|V|x3 position matrix, mesh) corner
+//      convention.
 //
 //  (b) 2D strip-endpoint positions A/B per layout edge
 //      (compute_differentiable_intersection_for_overlay): the same bary
 //      interpolation over the CONSTANT strip flattening heh_pos_2d, with the
 //      halfedge-attribute corner convention (pos[hh], pos[hh.next()],
-//      pos[hh.next().next()]) — the "residual S2 math" per the S2 closeout.
+//      pos[hh.next().next()]) — the only differentiable math left of the
+//      strip-flattening stage (S2), which is otherwise constant.
 //      These feed S3 (IntersectionStage).
 //
 // Adjoint (FacePoint, the only leaf type in practice):
 //   d_alpha += d_out . (A - C) ;  d_beta += d_out . (B - C)
 // accumulated from BOTH (a) — d_overlay_pos at the node row — and (b) — the
 // d_seg_A/d_seg_B rows produced by intersections_backward. EdgePoint sps use
-// d_alpha += d_out . (A - B); VertexPoint sps carry no gradient. (Production
-// sets requires_grad on every mapped sp regardless of type, but
-// compute_gradients only collects FacePoint grads — mirrored in
-// compute_gradients_hand, not here.)
+// d_alpha += d_out . (A - B); VertexPoint sps carry no gradient. (The
+// original torch path enabled gradients on every mapped sp regardless of
+// type but only collected FacePoint grads — that filter lives in
+// compute_gradients_hand / eval(), not here.)
 //
 // Faithfulness notes:
-//  * the 2D corners are copied out of the strips' torch tensors at collect
-//    time (constants per the Phase 2 audit; heh_pos_2d turns plain in
-//    Phase 5/6) — forward/backward are then torch-free, so a finite-
-//    difference loop over leaf_forward costs no torch traffic here.
+//  * the 2D corners are copied out of the strips' heh_pos_2d at collect time —
+//    they are constants w.r.t. the optimization (the strip flattening carries
+//    no gradient; see the "Phase 2 result" section of the remove-autodiff
+//    plan), so forward/backward never touch the strips again.
 //  * each mapped pn vertex owns exactly one overlay node row, but appears as
 //    a strip endpoint once per incident layout edge (valence-many records) —
 //    the adjoint accumulates across all of them, exactly like autograd.
-//  * arithmetic matches get_pos_intern's op order (validated bitwise in the
-//    Phase 3 mirror check: alpha*A + beta*B + (1.0 - alpha - beta)*C).
+//  * arithmetic matches get_pos_intern's op order (validated bitwise against
+//    the torch path during the port: alpha*A + beta*B + (1.0 - alpha - beta)*C).
 
 #include <vector>
 
@@ -82,8 +85,8 @@ void leaf_collect(std::vector<TriangleStrip> const& _strips,
                   PathNetworkData const& _pnd,
                   LeafCtx& _ctx);
 
-// Current bary values per pn vertex [n_pn_v x 2] (tensor-authoritative during
-// Phases 4-5): FacePoint -> (alpha, beta); EdgePoint -> (alpha, 0);
+// Current bary values per pn vertex [n_pn_v x 2]:
+// FacePoint -> (alpha, beta); EdgePoint -> (alpha, 0);
 // VertexPoint / invalid -> (0, 0).
 Eigen::MatrixX2d collect_bary(PathNetworkData const& _pnd);
 

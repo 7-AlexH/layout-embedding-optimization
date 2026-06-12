@@ -14,9 +14,10 @@ long g_vertex_sp_conversion_count = 0;
 
 namespace
 {
-// remove-autodiff Phase 5c: strip 2D positions are plain doubles (std::optional<vec2d>);
-// nullopt replaces the undefined-tensor sentinel. The strip is constant w.r.t. the
-// autograd graph (Phase 2 audit), so nothing here needs to be differentiable.
+// Strip 2D positions are plain doubles (std::optional<vec2d>); nullopt replaces
+// the original implementation's undefined-tensor sentinel. The strip flattening
+// is constant w.r.t. the optimization (see the remove-autodiff plan, "Phase 2
+// result"), so nothing here needs to be differentiable.
 
 pos3 pos3_of_2D(vec2d const& _v) { return pos3(_v.x(), _v.y(), 0.0); }
 
@@ -1104,31 +1105,6 @@ void compute_triangle_strip(TriangleStrip& _strip, const EH _l_eh, TargetMeshDat
     _strip.l_eh = _l_eh;
     init_triangle_strip_pn_vhs(_strip, _l_eh, _pnd);
 
-    // if (_strip.l_eh.idx.value == 209)
-    // {
-    //     auto v = gv::view();
-    //     view_path_network(_tmd, _pnd);
-    //     auto c = gv::canvas();
-    //     c.add_faces(_tmd.pos_, BLUE_25);
-    //     c.add_lines(_tmd.pos_, BLUE);
-    //     for(int i = 0; i < _strip.pn_vhs.size() - 1; ++i)
-    //     {
-    //         auto const sp_curr = _pnd.sp_on_target_.value()(_strip.pn_vhs[i]);
-    //         c.add_point(torch_to_pos3(sp_curr.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get())), RED).size(20);
-
-    //         auto const sp_next = _pnd.sp_on_target_.value()(_strip.pn_vhs[i + 1]);
-    //         c.add_point(torch_to_pos3(sp_next.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get())), MAGENTA).size(20);
-
-    //         c.add_line(torch_to_pos3(sp_curr.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get())), torch_to_pos3(sp_next.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get())), GREEN).size(10);
-
-    //         if(!sp_curr.is_vertex_sp() || !sp_next.is_vertex_sp())
-    //         {
-    //             auto fh = shared_face(sp_curr, sp_next, *_tmd.mesh_.get());
-    //             DEBUG_VAR(fh)
-    //         }
-    //     }
-    // }
-
     init_embedded_length(_strip, _tmd, _pnd);
 
     init_2D_strip_pos(_strip, _tmd, _ld, _pnd);
@@ -1378,9 +1354,6 @@ void init_triangle_strip_t_fhs(TriangleStrip& _strip, TargetMeshData const& _tmd
         assert(!sp_prev.is_vertex_sp());
         assert(!sp_curr.is_vertex_sp());
 
-        // cd.add_point(torch_to_pos3(sp_prev.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get())), MAGENTA);
-        // cd.add_point(torch_to_pos3(sp_curr.get_pos(_tmd.torch_pos_, *_tmd.mesh_.get())), MAGENTA);
-
         // if (_strip.l_eh.idx.value == 34)
         // {
         //     auto c = gv::canvas();
@@ -1480,10 +1453,6 @@ bool is_strip_valid(TriangleStrip& _strip, TargetMeshData const& _tmd, PathNetwo
     //     init_canvas_current_2D_pos(_strip);
     //     auto c = gv::canvas();
     //     c.add_data(cd_2D);
-
-    //     auto tg_from_2D = tg::pos3(torch_to_pos2(A));
-    //     auto tg_to_2D = tg::pos3(torch_to_pos2(B));
-    //     c.add_line(tg_from_2D, tg_to_2D, MAGENTA);
     // }
 
     return valid;

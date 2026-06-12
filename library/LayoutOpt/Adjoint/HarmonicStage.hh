@@ -1,19 +1,11 @@
 #pragma once
-// Phase 4 / S6 of the remove-autodiff plan: hand-rolled forward + reverse-mode
-// adjoint of the per-patch harmonic parameterization stage, plus the plain
-// (torch-free) port of the patch-collection indexing.
+// S6 of the adjoint chain (see documentation/adjointDifferentiation.md): the
+// per-patch harmonic parameterization — assemble the interior cotan-Laplacian
+// system A := -L, factor once (SimplicialLDLT, SparseLU fallback), solve for
+// the interior UVs, and hand-derive the solve adjoint. prepare_param is the
+// patch-collection indexing that feeds it.
 //
-// This restructures the Phase 1 sparse solve (Adjoint/SparseHarmonicSolve.cc,
-// a torch::autograd::Function) into the explicit stage-pair form used by
-// Phase 4: forward returns a context with everything backward needs, backward
-// scatters the upstream adjoint into d_cotans / d_boundary_uvs directly
-// instead of handing off to autograd. The math, assembly order, traversal
-// order, and solver (SimplicialLDLT with SparseLU fallback) are identical to
-// the Phase 1 path, so the forward solution is bitwise-equal to the
-// production sparse solve.
-//
-// Stage boundary (validation per plan section 4/S6 — inputs treated as
-// leaves):
+// Stage boundary (inputs treated as leaves for validation):
 //   inputs  : per-overlay-edge cotans [n_edges] (S5 output), per-patch
 //             boundary UVs (S4 output)
 //   output  : per-patch inner UVs [n_inner x 2]
@@ -24,19 +16,23 @@
 
 #include <LayoutOpt/DataStructures/LayoutEmbedding.hh>
 #include <LayoutOpt/DataStructures/Types.hh>
-#include <LayoutOpt/ObjectiveFunctions.hh> // MappingIndex (include chain de-torched in Phase 6)
+#include <LayoutOpt/ObjectiveFunctions.hh> // MappingIndex
 
 namespace LayoutOpt
 {
 
-// Plain port of torch_prepare_param: collect one patch's faces and classify
-// its overlay vertices into boundary (UV pinned from the path network) and
-// inner (solved for). Identical traversal and index assignment; the boundary
-// UVs are gathered from a plain per-overlay-halfedge UV array (from-vertex
-// convention, same layout as the `uvs` tensor in harmonic_distortion_loss).
-// If _boundary_src_hehs is non-null it receives, per boundary entry, the
-// overlay halfedge idx the UV was gathered from (the row of _o_uvs) — the S4
-// gradcheck uses this to scatter d_boundary_uvs back to per-halfedge UV rows.
+// Collect one patch's faces and classify its overlay vertices into boundary
+// (UV pinned from the path network) and inner (solved for). The boundary UVs
+// are gathered from a per-overlay-halfedge UV array in the from-vertex
+// convention (the o_uvs gather in hand_loss_forward). If _boundary_src_hehs
+// is non-null it receives, per boundary entry, the overlay halfedge idx the
+// UV was gathered from (the row of _o_uvs) — used to scatter d_boundary_uvs
+// back to per-halfedge UV rows.
+//
+// NOTE: _map_to_vec must arrive in the fresh {-1, true} state and is the only
+// argument shared across patches; hand_loss_forward's parallel loop hands each
+// thread its own scratch attribute and resets exactly the entries written here
+// (the inner/boundary lists) after every patch.
 void prepare_param(int const _patch_value,
                    PathNetworkData const& _pnd,
                    OverlayMeshData const& _omd,
@@ -48,10 +44,11 @@ void prepare_param(int const _patch_value,
                    std::vector<FH>& _patch_fhs,
                    std::vector<int>* _boundary_src_hehs = nullptr);
 
-// Forward context: the system structure (same flattened encoding as
-// torch_harmonic_param's sparse path) plus the solution. Backward re-assembles
-// and re-factors A from these (mirrors the Phase 1 custom function, which
-// cannot stow the factorization either).
+// Forward context: the flattened system structure plus the solution. Backward
+// re-assembles and re-factors A from these rather than stowing the
+// factorization (one factorization object per patch would dominate the ctx
+// memory; the re-factor is bitwise-identical input, so the adjoint solve is
+// exact w.r.t. the forward solve).
 struct PatchHarmonicCtx
 {
     int n_inner = 0;
@@ -61,8 +58,8 @@ struct PatchHarmonicCtx
     Eigen::MatrixX2d inner_uvs; // X, the solve output [n_inner x 2]
 };
 
-// Build the system structure (same traversal as torch_harmonic_param), then
-// assemble A := -L / B and solve A X = B. n_inner == 0 yields an empty ctx.
+// Build the system structure, then assemble A := -L / B and solve A X = B.
+// n_inner == 0 yields an empty ctx.
 PatchHarmonicCtx harmonic_param_forward(pm::vertex_attribute<MappingIndex> const& _map_to_vec,
                                         std::vector<VH> const& _inner_patch_vhs,
                                         std::vector<vec2d> const& _boundary_uvs,

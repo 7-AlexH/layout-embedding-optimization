@@ -43,8 +43,8 @@ double hand_loss_forward(LeafCtx const& _leaf,
         // S5
         cotans_forward(_ctx.pos, *_omd.mesh_.get(), _ctx.cot_ctx, _ctx.cotans);
 
-        // per-overlay-halfedge UV gather (from-vertex convention, same as the
-        // `uvs` tensor in harmonic_distortion_loss)
+        // per-overlay-halfedge UV gather (from-vertex convention, preserved
+        // from the original torch loss)
         auto const heh_count = _omd.mesh_->halfedges().size();
         Eigen::MatrixX2d o_uvs = Eigen::MatrixX2d::Zero((Eigen::Index)heh_count, 2);
         _ctx.pn_of_oheh.assign(heh_count, -1);

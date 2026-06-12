@@ -26,11 +26,10 @@ EvalInfo eval(TargetMeshData& _tmd,
 
     EvalInfo eval_info;
 
-    // remove-autodiff Phase 6b: the hand-rolled adjoint chain replaces the
-    // torch loss + autograd (leaf_collect -> hand_loss_forward ->
-    // hand_loss_backward, see Adjoint/HandGradients.hh). Loss assembly inside
-    // hand_loss_forward matches the old eval() order: w_h * harmonic +
-    // w_c * curvature.
+    // The hand-rolled adjoint chain: leaf_collect -> hand_loss_forward ->
+    // hand_loss_backward (see Adjoint/HandGradients.hh). Loss assembly inside
+    // hand_loss_forward is w_h * harmonic + w_c * curvature, the same order
+    // as the original torch loss.
     timers.start(TimerCollection::EvalObjective);
     LeafCtx leaf;
     leaf_collect(_strips, _tmd, _ld, _pnd, leaf);
@@ -85,7 +84,7 @@ EvalInfo eval(TargetMeshData& _tmd,
     hand_loss_backward(ctx, leaf, _tmd, _opts, d_bary);
     timers.stop(TimerCollection::Backpropagation);
 
-    // gradient collection convention (matches the old compute_gradients seam):
+    // gradient collection convention (preserved from the original torch path):
     // zero default, only FacePoint surface points carry a gradient
     auto grads = _pnd.mesh_->vertices().make_attribute<vec2d>(vec2d::Zero());
     for (auto pn_vh : _pnd.mesh_->vertices())

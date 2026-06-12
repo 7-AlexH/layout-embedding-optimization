@@ -11,8 +11,9 @@ namespace LayoutOpt
 /// @brief Compute layout embedding based on layout node positions (ambient) and initializes surface points (intrinsic).
 ///        Slightly corrects layout positions if they are not on the surface or were corrected (_allow_fallback_for_stability = true).
 /// @param _allow_fallback_for_stability If true, ensures surface points lie inside a triangle by clamping barycentric coordinates to _eps
-/// @param _strips_out gradcheck-only (remove-autodiff Phase 4): if non-null, receives the per-layout-edge
-///        triangle strips this embedding was built from (otherwise they stay local and are discarded)
+/// @param _strips_out if non-null, receives the per-layout-edge triangle strips this embedding was
+///        built from (eval()'s adjoint chain differentiates through their 2D flattening; otherwise
+///        they stay local and are discarded)
 void compute_layout_embedding_init(TargetMeshData const& _tmd,
                                    LayoutData& _ld,
                                    PathNetworkData& _pnd,

@@ -48,14 +48,15 @@ void intersections_forward(std::vector<TriangleStrip> const& _strips,
             rec.t_from = intersect_hh.vertex_from().idx.value;
             rec.t_to = intersect_hh.vertex_to().idx.value;
 
-            // torch_compute_intersection_parameter(line_a = (to_2D, from_2D),
-            // line_b = (A, B)), same operation order
+            // intersection parameter of line_a = (to_2D, from_2D) with
+            // line_b = (A, B); operation order preserved from the original
+            // torch implementation
             rec.a = from_2D - to_2D;
             rec.b = b;
             rec.b0_a0 = A - to_2D;
             rec.cross = rec.a.x() * rec.b.y() - rec.a.y() * rec.b.x();
-            // production returns an empty tensor here and crashes on params[1]
-            // one line later; never hit on valid strips
+            // never hit on valid strips (the original implementation crashed
+            // here too, via an empty-result read)
             assert(std::abs(rec.cross) >= 1e-8 && "lines are (nearly) parallel");
             rec.t_numer = rec.b0_a0.x() * rec.b.y() - rec.b0_a0.y() * rec.b.x();
             rec.t = rec.t_numer / rec.cross;

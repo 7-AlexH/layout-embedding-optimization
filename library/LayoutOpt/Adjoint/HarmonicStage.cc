@@ -15,10 +15,11 @@ namespace LayoutOpt
 namespace
 {
 
-// Assemble A := -L from the flattened structure lists. Same triplet order as
-// the Phase 1 SparseHarmonicSolve assembly (all off-diagonal entries, then all
-// diagonal entries; setFromTriplets sums duplicates), so the factorization and
-// solution are bitwise-equal to the production sparse path.
+// Assemble A := -L from the flattened structure lists. The triplet order (all
+// off-diagonal entries, then all diagonal entries; setFromTriplets sums
+// duplicates in insertion order) is part of the bitwise-determinism contract —
+// reordering shifts the summed entries at ulp level (e2e_determinism gates
+// this).
 Eigen::SparseMatrix<double> assemble_system_matrix(Eigen::VectorXd const& _w,
                                                    std::vector<int64_t> const& _off,
                                                    std::vector<int64_t> const& _diag,
@@ -127,7 +128,8 @@ PatchHarmonicCtx harmonic_param_forward(pm::vertex_attribute<MappingIndex> const
     if (ctx.n_inner == 0)
         return ctx;
 
-    // system structure — same traversal as torch_harmonic_param's sparse path
+    // system structure: one diagonal entry per outgoing halfedge; the neighbor
+    // lands in B (boundary, known UV) or in an off-diagonal of A (inner)
     for (int i = 0; i < ctx.n_inner; ++i)
     {
         auto o_vh = _inner_patch_vhs[i];
@@ -180,7 +182,7 @@ void harmonic_param_backward(PatchHarmonicCtx const& _ctx,
         return;
 
     // mu := A^-T d_inner; A is symmetric, so solve with A directly. The
-    // factorization is redone here (mirrors the Phase 1 custom function).
+    // factorization is redone from the ctx (see PatchHarmonicCtx).
     auto A = assemble_system_matrix(_cotans, _ctx.off, _ctx.diag, _ctx.n_inner);
     Eigen::MatrixXd Mu = solve_system(A, _d_inner_uvs);
 

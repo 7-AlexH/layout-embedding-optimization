@@ -1,17 +1,16 @@
 #pragma once
-// Phase 4 / S3 of the remove-autodiff plan: hand-rolled forward + reverse-mode
-// adjoint of compute_differentiable_intersection_for_overlay
-// (DifferentiableIntersection.cc) — the stage that OVERWRITES the overlay
-// position rows of the interior path-network vertices of each arc with the
-// 3D point implied by the 2D strip-flattening intersection parameter.
+// S3 of the adjoint chain (see documentation/adjointDifferentiation.md): the
+// stage that OVERWRITES the overlay position rows of the interior path-network
+// vertices of each arc with the 3D point implied by the 2D strip-flattening
+// intersection parameter.
 //
 // Per layout edge (= one TriangleStrip), with A/B the flattened 2D positions
 // of the arc's endpoint surface points (strip.pn_vhs.front()/back()):
 //   for each interior pn vertex i = 1 .. pn_vhs.size()-2 (an EdgePoint whose
 //   heh_idx names the crossed target halfedge hh):
 //     from_2D = strip.heh_pos_2d[hh]        to_2D = strip.heh_pos_2d[hh.opposite()]
-//     closed form (torch_compute_intersection_parameter with
-//     line_a = (to_2D, from_2D), line_b = (A, B)):
+//     closed-form 2D line-line intersection parameter
+//     (line_a = (to_2D, from_2D), line_b = (A, B)):
 //       a       = from_2D - to_2D
 //       b       = B - A
 //       cross   = a.x*b.y - a.y*b.x
@@ -20,7 +19,7 @@
 //       t       = t_numer / cross
 //     pos[o_row] = from_3D * t + to_3D * (1 - t)   (3D target edge endpoints)
 //
-// Differentiation boundary (Phase 2 audit, plan "Phase 2 result"): the strip
+// Differentiation boundary (remove-autodiff plan, "Phase 2 result"): the strip
 // flattening heh_pos_2d is CONSTANT, so a, to_2D and the 3D target positions
 // from_3D/to_3D carry no gradient — the only differentiable inputs are A and B
 // (which S1 derives from the layout-node face-point barycentrics). Hence
@@ -34,18 +33,15 @@
 //   d_B      += d_b
 //
 // Faithfulness notes:
-//  * production guards |cross| < 1e-8 by returning an EMPTY tensor, which
-//    would crash on params[1] one line later — i.e. a hard stop, never hit in
-//    practice (strips are validity-checked). The hand forward asserts instead.
+//  * the original torch implementation guarded |cross| < 1e-8 by returning an
+//    EMPTY tensor, which crashed one line later — i.e. a hard stop, never hit
+//    in practice (strips are validity-checked). The forward asserts instead.
 //  * the interior overlay rows are OVERWRITTEN, so their entire incoming
 //    adjoint is consumed here (routed to A/B); the rows' pre-write values are
 //    dead. Layout-node rows and untouched target rows are not this stage's
 //    business (S1 / constants).
 //  * each interior pn vertex belongs to exactly one arc, so the written rows
 //    are disjoint across strips.
-//  * the forward reads the constant 2D flattening out of the strips' torch
-//    tensors (removed in Phase 6 when heh_pos_2d turns plain); the backward is
-//    torch-free.
 
 #include <vector>
 

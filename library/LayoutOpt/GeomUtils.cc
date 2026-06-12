@@ -94,8 +94,9 @@ vec3d compute_bary_coords_2D(vec2d const& _point, HEH const& _heh, Eigen::Matrix
     vec2d const p1 = _pos.row(_heh.vertex_to().idx.value).transpose();
     vec2d const p2 = _pos.row(_heh.next().vertex_to().idx.value).transpose();
 
-    // The torch path solves T^t * lambda = P (homogeneous 3x3 system) via
-    // torch::linalg_solve, i.e. LAPACK partial-pivot LU; PartialPivLU matches.
+    // The original torch implementation solved T^t * lambda = P (homogeneous
+    // 3x3 system) via torch::linalg_solve, i.e. LAPACK partial-pivot LU;
+    // PartialPivLU matches.
     Eigen::Matrix3d T_t;
     T_t << p0.x(), p1.x(), p2.x(), //
         p0.y(), p1.y(), p2.y(),    //

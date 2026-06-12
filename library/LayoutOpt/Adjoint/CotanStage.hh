@@ -1,29 +1,27 @@
 #pragma once
-// Phase 4 / S5 of the remove-autodiff plan: hand-rolled forward + reverse-mode
-// adjoint of the per-edge cotan-weight stage (port of torch_cotans). Per
-// overlay edge, the cotan weight is the sum of the two opposite-corner
-// cotangents:
+// S5 of the adjoint chain (see documentation/adjointDifferentiation.md):
+// hand-rolled forward + reverse-mode adjoint of the per-edge cotan-weight
+// stage. Per overlay edge, the cotan weight is the sum of the two
+// opposite-corner cotangents:
 //
 //   cot[e] = (e_ia·e_ja)/(|e_ia x e_ja| + eps) + (e_ib·e_jb)/(|e_ib x e_jb| + eps)
 //
 // where i,j are the edge endpoints and a,b the two opposite apex vertices
 // (i = halfedgeA->to, j = halfedgeB->to, a = halfedgeA.next->to,
-// b = halfedgeB.next->to), exactly as torch_cotans gathers them. The +eps
-// (1e-10, NOT Types EPS) lives only in the cotan division; the norm derivative
-// uses the bare |cross|, matching torch's norm backward.
+// b = halfedgeB.next->to). The +eps (1e-10, NOT Types EPS) lives only in the
+// cotan division; the norm derivative uses the bare |cross|, following torch's
+// norm-backward convention.
 //
-// Stage boundary (validation per plan section 4/S5 — inputs treated as leaves):
+// Stage boundary (inputs treated as leaves for validation):
 //   inputs  : overlay 3D positions [n_overlay x 3] (S1/S3 output)
 //   output  : per-edge cotan weights [n_edges] (S6 input)
 //   adjoints: d_overlay_pos (accumulated; the cotan path is one of two paths
 //             positions feed — the other is the direct 3D distortion path in S7)
 //
-// NOTE on face areas: the plan pairs "cotans + areas" under S5, but
-// torch_face_areas' result is dead in the live loss path (computed at
-// ObjectiveFunctions.cc:25, never read — only param-space areas from the
-// distortion stage feed the loss). Face areas are consumed solely by the
-// experimental Yamabe losses in ObjectiveFunctionsAttic.cc, which stay
-// torch-gated. So S5 ports cotans only.
+// NOTE on face areas: the original torch implementation also computed per-face
+// areas here, but their result was dead in the live loss path (only the
+// experimental Yamabe losses consumed them, and those were deleted with the
+// torch removal) — so face areas were deliberately never ported.
 
 #include <cstdint>
 #include <vector>
@@ -48,8 +46,8 @@ struct CotanCtx
     std::vector<int> b_idx; // apex opposite on side B (halfedgeB.next->to)
 };
 
-// Forward: fill _cotans [n_edges] (indexed by edge idx) and _ctx. Mirrors
-// torch_cotans' arithmetic per edge.
+// Forward: fill _cotans [n_edges] (indexed by edge idx) and _ctx. The
+// arithmetic per edge matches the original implementation op for op.
 void cotans_forward(Eigen::MatrixX3d const& _pos,
                     pm::Mesh const& _mesh,
                     CotanCtx& _ctx,
