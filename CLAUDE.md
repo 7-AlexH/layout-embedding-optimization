@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is the code accompanying the paper _Embedding Optimization of Layouts via Distortion Minimization_. It optimizes how a coarse quad-layout (a low-poly "cage" mesh) is embedded onto a target triangle mesh by minimizing parametric distortion via gradient descent. Gradients come from a hand-written reverse-mode adjoint chain over plain doubles/Eigen (`library/LayoutOpt/Adjoint/`) — see [`documentation/adjointDifferentiation.md`](documentation/adjointDifferentiation.md).
+This is the code accompanying the paper _Embedding Optimization of Layouts via Distortion Minimization_. It optimizes how a coarse quad-layout (a low-poly "cage" mesh) is embedded onto a target triangle mesh by minimizing parametric distortion via gradient descent. Gradients come from a hand-written reverse-mode adjoint chain over plain doubles/Eigen (`library/LayoutOpt/Adjoint/`) — see [`documentation/adjointDifferentiation.md`](documentation/adjointDifferentiation.md). (The chain replaced an earlier LibTorch/autograd implementation; [`torchRemoval.md`](torchRemoval.md) documents that port and the conventions the hand code preserves.)
 
 ## Setup
 
@@ -29,7 +29,12 @@ cmake --preset clang-release && cmake --build --preset clang-release
 cmake --preset clang-debug && cmake --build --preset clang-debug
 ```
 
-There are no tests. The apps in `apps/` serve as integration entry points.
+There is no unit-test framework. Two apps are permanent validation harnesses (exit nonzero on failure, write `gradcheck_fd.txt` / `e2e_determinism.txt` to the working directory):
+
+- `gradcheck_fd` — hand gradients vs central finite differences on the canonical banana state.
+- `e2e_determinism` — two full production runs must be bitwise identical, plus an iter-0 reference-loss gate.
+
+Run both after touching anything in `library/LayoutOpt/Adjoint/` or the OpenMP parallelism.
 
 ## Build (Windows — MSVC)
 
@@ -69,7 +74,7 @@ Each `.cc` file in `apps/` becomes its own executable. The main entry point is `
 ..\MSVC-Release\load_state.exe
 ```
 
-`optimize` runs headless (writes screenshots); `load_state` and `extract_layout_from_qm` open an interactive viewer window. Input meshes are `.obj` files. The `DATA_PATH` and `OUTPUT_PATH` CMake variables (set at configure time) are baked into the binary as preprocessor macros.
+`optimize` runs headless (writes screenshots); `load_state` and `extract_layout_from_qm` open an interactive viewer window. The validation harnesses `gradcheck_fd` and `e2e_determinism` (see Build) also run headless. Input meshes are `.obj` files. The `DATA_PATH` and `OUTPUT_PATH` CMake variables (set at configure time) are baked into the binary as preprocessor macros.
 
 ## Architecture
 
@@ -96,6 +101,8 @@ The loss and its gradient are computed by a hand-written forward + reverse-mode 
 - **Curvature alignment** — aligns patch boundaries to principal curvature directions (`CurvatureAlignmentStage`).
 
 Weights are set in `OptimizationOptions`; the optimizer is Adam by default (`Optimizers.cc`). `apps/gradcheck_fd.cc` (finite-difference gradient check) and `apps/e2e_determinism.cc` (bitwise run-to-run determinism + reference-loss gate) are the permanent validation harnesses.
+
+**Determinism contract:** the pipeline is bitwise run-to-run deterministic and `e2e_determinism` gates it. `hand_loss_forward` parallelizes the per-patch S6/S7 work under OpenMP, but each patch writes only its own slot and the loss reduction stays sequential in patch order, so results are independent of thread count/schedule. Two rules when touching this code: keep reductions/iteration orders fixed (e.g. the sparse-triplet insertion order in `HarmonicStage.cc` is load-bearing), and never create polymesh attributes inside a parallel region (attribute registration is not thread-safe — per-thread scratch attributes are created and destroyed outside the loop).
 
 ### Type conventions (`DataStructures/Types.hh`)
 
